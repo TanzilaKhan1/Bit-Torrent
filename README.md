@@ -29,6 +29,8 @@
   - Encrypted peer communication
   - DoS protection and peer input validation
   - **Message Stream Encryption (MSE)** to bypass throttling (BEP 0012)
-
+- **Advanced Networking**
+  - Fully asynchronous networking 
+  - Optional support for **uTP (UDP-based protocol)**
 
 ---
