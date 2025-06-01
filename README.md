@@ -1,6 +1,3 @@
-# Bit-Torrent
-BitTorrent client with DHT, PEX, uTP, and encrypted peer connections
-
 # Python-BitTorrent
 
 **Python-BitTorrent** is a modular, asynchronous BitTorrent client implementation written in Python. It is designed to support the full BitTorrent protocol suite, including .torrent parsing, magnet URIs, DHT, peer-to-peer communication, and protocol extensions such as encryption and uTP.
