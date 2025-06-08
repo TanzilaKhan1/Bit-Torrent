@@ -34,3 +34,10 @@
   - Optional support for **uTP (UDP-based protocol)**
 
 ---
+
+##  Definitions
+
+- A tracker in BitTorrent is a crucial server that helps peers (users downloading/uploading the torrent) find each other. It maintains a list of peers currently downloading/uploading specific torrent. It also help new peers find other peers in swarm. When I start downloading, my bit torrent client contacts the tracker. The tracker responds with a list of other peers in the swarm. Peers periodically anounce to the tracker that their ipaddress, port, how much they've uploaded/downloaded, how much they have to download.
+
+Example Tracker: http://tracker.example.com:6969/announce
+
