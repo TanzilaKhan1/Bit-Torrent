@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 """
-create_torrent.py
-
-A utility to generate a .torrent file from a file or directory.
-
-Usage:
     python create_torrent.py \
         --input /path/to/file_or_directory \
         --output /path/to/output.torrent \
