@@ -6,6 +6,11 @@
 
 A **complete, modern BitTorrent client** implementation written in Python with full async/await support. Built from the ground up following BitTorrent protocol specifications and modern software engineering practices.
 
+##  TODO
+
+[] Check
+
+
 ##  Features
 
 ###  **Core BitTorrent Protocol**
