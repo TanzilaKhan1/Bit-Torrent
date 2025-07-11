@@ -8,7 +8,7 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 
 ##  TODO
 
-[] Check
+- [] Check
 
 
 ##  Features
