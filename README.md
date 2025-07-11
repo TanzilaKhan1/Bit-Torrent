@@ -8,7 +8,15 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 
 ##  TODO
 
-- [] Check
+- [ ] Mercury
+- [x] Venus
+- [x] Earth (Orbit/Moon)
+- [x] Mars
+- [ ] Jupiter
+- [ ] Saturn
+- [ ] Uranus
+- [ ] Neptune
+- [ ] Comet Haley
 
 
 ##  Features
