@@ -8,7 +8,7 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 
 ##  TODO
 
-- [x] Make sure the a single client can ask for announce for multiple senders, select the best among them
+- [ ] Make sure the a single client can ask for announce for multiple senders, select the best among them
 - [ ] Proper seeding of files and maintaining a decentralized DHT
 - [ ] Making the server workable with all the client
 - [ ] Nodes visualization of sending files
