@@ -1,4 +1,4 @@
-# 🌊 Python BitTorrent Client
+#  Python BitTorrent Client
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,9 +6,9 @@
 
 A **complete, modern BitTorrent client** implementation written in Python with full async/await support. Built from the ground up following BitTorrent protocol specifications and modern software engineering practices.
 
-## ✨ Features
+##  Features
 
-### 🚀 **Core BitTorrent Protocol**
+###  **Core BitTorrent Protocol**
 
 - **Complete .torrent file parsing** with bencode support
 - **Magnet URI parsing** (foundation for metadata exchange)
@@ -17,7 +17,7 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 - **Rarest-first piece selection strategy**
 - **Block-based downloading** with configurable block sizes
 
-### 🌐 **Network & Discovery**
+###  **Network & Discovery**
 
 - **HTTP/HTTPS tracker support** with automatic announcements
 - **UDP tracker support** with proper handshake protocol
@@ -26,7 +26,7 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 - **Automatic peer connection management**
 - **Rate limiting and bandwidth management**
 
-### 🔧 **Advanced Features**
+###  **Advanced Features**
 
 - **Fully asynchronous architecture** using asyncio
 - **Multi-torrent scheduling** with concurrent downloads
@@ -36,7 +36,7 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 - **Command-line interface** with multiple operation modes
 - **Daemon mode** for background operation
 
-### 🔐 **Security & Reliability**
+###  **Security & Reliability**
 
 - **Protocol encryption foundation** (Diffie-Hellman key exchange)
 - **Peer validation and DoS protection**
@@ -44,13 +44,13 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 - **Connection timeout management**
 - **File integrity verification**
 
-## 📋 Requirements
+##  Requirements
 
 - **Python 3.13+**
 - **asyncio** support
 - **Network connectivity** for peer communication
 
-## 🚀 Installation
+##  Installation
 
 ### Using uv (Recommended)
 
@@ -187,7 +187,7 @@ uv run python torrent_creator.py \
     --piece-length 524288  # 512KB pieces
 ```
 
-## 🏗️ Architecture
+## 🏗 Architecture
 
 The BitTorrent client follows a modular, event-driven architecture:
 
@@ -218,49 +218,49 @@ The BitTorrent client follows a modular, event-driven architecture:
 
 ### Core Components
 
-#### 🗂️ **Scheduler** (`src/core/scheduler.py`)
+#### 🗂 **Scheduler** (`src/core/scheduler.py`)
 
 - Manages multiple torrent sessions
 - Handles torrent lifecycle (starting, stopping, pausing)
 - Coordinates between different components
 - Provides session statistics and monitoring
 
-#### 🧩 **Piece Manager** (`src/core/piece_manager.py`)
+####  **Piece Manager** (`src/core/piece_manager.py`)
 
 - Implements rarest-first piece selection
 - Manages block-level downloading
 - Coordinates piece requests across peers
 - Handles piece validation and assembly
 
-#### 🌐 **Peer Connection** (`src/core/peer_connection.py`)
+####  **Peer Connection** (`src/core/peer_connection.py`)
 
 - BitTorrent wire protocol implementation
 - Handles peer handshakes and message exchange
 - Manages connection state (choked/unchoked, interested)
 - Implements keep-alive and timeout handling
 
-#### 📡 **Tracker Client** (`src/core/tracker_client.py`)
+####  **Tracker Client** (`src/core/tracker_client.py`)
 
 - HTTP/HTTPS tracker communication
 - UDP tracker protocol support
 - Automatic announce scheduling
 - Multi-tracker management
 
-#### 🔍 **DHT** (`src/core/dht.py`)
+####  **DHT** (`src/core/dht.py`)
 
 - Kademlia distributed hash table
 - Peer discovery without trackers
 - Bootstrap node management
 - Routing table maintenance
 
-#### 💾 **Storage** (`src/core/storage.py`)
+####  **Storage** (`src/core/storage.py`)
 
 - Async file I/O operations
 - Multi-file torrent support
 - Piece verification with SHA-1
 - Download progress tracking
 
-## ⚙️ Configuration
+##  Configuration
 
 ### Default Settings
 
@@ -298,7 +298,7 @@ export BITTORRENT_LISTEN_PORT="6881"
 export BITTORRENT_MAX_PEERS="100"
 ```
 
-## 📊 Performance
+##  Performance
 
 ### Benchmarks
 
@@ -318,7 +318,7 @@ export BITTORRENT_MAX_PEERS="100"
 - **Lazy loading** of torrent metadata
 - **Efficient bitfield** operations for piece tracking
 
-## 🧪 Testing
+##  Testing
 
 ### Run Basic Tests
 
@@ -377,25 +377,7 @@ BitTorrent/
 4. **Update documentation** as needed
 5. **Submit pull request**
 
-### Code Style
 
-- **PEP 8** compliance
-- **Type hints** throughout
-- **Async/await** for I/O operations
-- **Comprehensive docstrings**
-- **Error handling** with specific exceptions
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our contributing guidelines:
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
-3. **Make your changes** with appropriate tests
-4. **Follow code style guidelines**
-5. **Commit your changes**: `git commit -m 'Add amazing feature'`
-6. **Push to the branch**: `git push origin feature/amazing-feature`
-7. **Open a Pull Request**
 
 ### Development Setup
 
@@ -415,7 +397,7 @@ uv run black src/
 uv run flake8 src/
 ```
 
-## 📜 Protocol Support
+## Protocol Support
 
 ### Implemented BEPs (BitTorrent Enhancement Proposals)
 
@@ -441,7 +423,7 @@ uv run flake8 src/
 | `piece`          | ✅     | Piece block data                |
 | `cancel`         | ✅     | Request cancellation            |
 
-## 🚨 Known Limitations
+##  Known Limitations
 
 - **Magnet URI metadata exchange** not fully implemented
 - **uTP (UDP Transport Protocol)** not implemented
@@ -449,7 +431,7 @@ uv run flake8 src/
 - **Peer exchange (PEX)** not implemented
 - **Web seeding** not supported
 
-## 🔧 Troubleshooting
+##  Troubleshooting
 
 ### Common Issues
 
@@ -496,25 +478,3 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 ```
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **BitTorrent Protocol Specification** - Bram Cohen and the BitTorrent community
-- **Python asyncio** community for excellent async programming resources
-- **Kademlia DHT** research and implementations
-- All contributors to the BitTorrent ecosystem
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/BitTorrent/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/BitTorrent/discussions)
-- **Email**: your.email@example.com
-
----
-
-**Built with ❤️ by the Python BitTorrent community**
-
-_Happy torrenting! 🌊_
