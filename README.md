@@ -8,15 +8,11 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 
 ##  TODO
 
-- [ ] Mercury
-- [x] Venus
-- [x] Earth (Orbit/Moon)
-- [x] Mars
-- [ ] Jupiter
-- [ ] Saturn
-- [ ] Uranus
-- [ ] Neptune
-- [ ] Comet Haley
+- [ ] Make sure the a single client can ask for announce for multiple senders, select the best among them
+- [ ] Proper seeding of files and maintaining a decentralized DHT
+- [ ] Making the server workable with all the client
+- [ ] Nodes visualization of sending files
+- [ ] Makinf sure proper torrent behavior ( single file collected from multiple users)
 
 
 ##  Features
