@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+
+#Bit-Torrent/src/core/bit_torrent_peer.py
+
+"""
+FINAL FIXED: BitTorrent Client with Working Piece Transfer
+=========================================================
+
+All components now properly fixed for actual file transfer.
+"""
+
+
+
+import asyncio
+from pathlib import Path
+from src.core.scheduler import TorrentScheduler
+from src.core.peer_server import PeerServer
+from src.core.cli_visualizer import CLIVisualizer, TorrentVisualInfo, PeerVisualInfo
+from src.core.utils import get_logger
+
+logger = get_logger(__name__)
+
+
+class FinalFixedBitTorrentPeer:
+    """FINAL FIXED: BitTorrent peer with working file transfer."""
+    
+    def __init__(self, port: int, download_dir: str, tracker_url: str = "http://localhost:8080/announce"):
+        self.port = port
+        self.download_dir = Path(download_dir)
+        self.tracker_url = tracker_url
+        
+        # Core components
+        self.scheduler = TorrentScheduler(str(self.download_dir), port)
+        self.peer_server = PeerServer(port=port)
+        self.visualizer = CLIVisualizer()
+        
+        # State
+        self.running = False
+        self.shutdown_event = asyncio.Event()
+        
+        # Create download directory
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"FINAL FIXED: Peer initialized on port {port}, download dir: {download_dir}")
+    
+    async def start(self):
+        """Start the peer."""
+        if self.running:
+            return
+        
+        logger.info(f"🚀 FINAL FIXED: Starting peer on port {self.port}...")
+        
+        try:
+            # Start peer server
+            await self.peer_server.start()
+            
+            # Connect components
+            self.scheduler.set_peer_server(self.peer_server)
+            
+            # Start scheduler
+            await self.scheduler.start()
+            
+            # Start visualizer
+            await self.visualizer.start()
+            
+            self.running = True
+            logger.info(f"✅ FINAL FIXED: Peer started successfully on port {self.port}")
+            
+        except Exception as e:
+            logger.error(f"Failed to start peer: {e}")
+            await self.stop()
+            raise
+    
+    async def stop(self):
+        """Stop the peer."""
+        if not self.running:
+            return
+        
+        logger.info("🛑 FINAL FIXED: Stopping peer...")
+        
+        self.running = False
+        self.shutdown_event.set()
+        
+        await self.visualizer.stop()
+        await self.scheduler.stop()
+        await self.peer_server.stop()
+        
+        logger.info("✅ FINAL FIXED: Peer stopped")
+    
+    async def add_torrent(self, torrent_path: str) -> bool:
+        """Add a torrent file."""
+        if not self.running:
+            logger.error("Peer not running")
+            return False
+        
+        torrent_file = Path(torrent_path)
+        if not torrent_file.exists():
+            logger.error(f"Torrent file not found: {torrent_path}")
+            return False
+        
+        logger.info(f"📋 FINAL FIXED: Adding torrent: {torrent_path}")
+        success = await self.scheduler.add_torrent_file(torrent_path)
+        
+        if success:
+            logger.info(f"✅ Successfully added torrent: {torrent_path}")
+            # Start visualizer update loop
+            asyncio.create_task(self._update_visualizer_loop())
+        else:
+            logger.error(f"❌ Failed to add torrent: {torrent_path}")
+        
+        return success
+    
+    async def _update_visualizer_loop(self):
+        """FINAL FIXED: Update visualizer with accurate statistics."""
+        while self.running:
+            try:
+                sessions = self.scheduler.get_all_sessions()
+                
+                for session_data in sessions:
+                    # Convert session data to visual info with FIXED statistics
+                    torrent_info = self._session_to_visual_info(session_data)
+                    self.visualizer.update_torrent(torrent_info)
+                
+                await asyncio.sleep(1.0)  # Update every second
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in visualizer update: {e}")
+                await asyncio.sleep(1.0)
+    
+    def _session_to_visual_info(self, session_data: dict) -> TorrentVisualInfo:
+        """FINAL FIXED: Convert session data to TorrentVisualInfo with accurate statistics."""
+        peer_info = []
+        
+        # FIXED: Get accurate peer statistics
+        for peer_id, peer_connection in session_data.get('peer_connections', {}).items():
+            # Determine status based on actual connection state
+            status = 'disconnected'
+            if peer_connection.connected:
+                if peer_connection.can_download_from():
+                    status = 'downloading'
+                elif peer_connection.can_upload_to():
+                    status = 'uploading'
+                elif peer_connection.peer_interested or peer_connection.am_interested:
+                    status = 'connected'
+                else:
+                    status = 'idle'
+            
+            # Get actual transfer statistics
+            downloaded_bytes, uploaded_bytes, pending_requests = peer_connection.get_stats()
+            
+            peer_visual = PeerVisualInfo(
+                peer_id=peer_id,
+                host=peer_connection.host,
+                port=peer_connection.port,
+                status=status,
+                download_rate=0.0,  # Real-time rate calculation would need more complex tracking
+                upload_rate=0.0,    # Real-time rate calculation would need more complex tracking
+                pieces_downloaded=downloaded_bytes,
+                pieces_uploaded=uploaded_bytes,
+                last_activity=peer_connection.last_activity,
+                connection_time=peer_connection.last_activity
+            )
+            peer_info.append(peer_visual)
+        
+        # FIXED: Get storage information
+        storage_type = "standard"
+        seeded_files = None
+        downloaded_files = None
+        
+        storage = session_data.get('storage')
+        if storage and hasattr(storage, 'get_seeded_files'):
+            storage_type = "peer"
+            try:
+                seeded_files = storage.get_seeded_files()
+                downloaded_files = storage.get_downloaded_files()
+            except Exception as e:
+                logger.debug(f"Error getting peer storage files: {e}")
+                seeded_files = []
+                downloaded_files = []
+        
+        # FINAL FIXED: Use accurate statistics from session
+        return TorrentVisualInfo(
+            info_hash=session_data.get('info_hash', ''),
+            name=session_data.get('name', ''),
+            total_size=session_data.get('total_size', 0),
+            downloaded=session_data.get('total_downloaded', 0),  # FIXED: Use actual downloaded bytes
+            uploaded=session_data.get('total_uploaded', 0),      # FIXED: Use actual uploaded bytes
+            progress=session_data.get('progress_percentage', 0.0) / 100.0,
+            download_rate=session_data.get('download_rate', 0.0),  # FIXED: Use actual download rate
+            upload_rate=session_data.get('upload_rate', 0.0),     # FIXED: Use actual upload rate
+            peers=peer_info,
+            pieces_completed=session_data.get('pieces_completed', 0),
+            pieces_total=session_data.get('pieces_total', 0),
+            status=session_data.get('state', 'unknown'),
+            seeded_files=seeded_files,
+            downloaded_files=downloaded_files,
+            storage_type=storage_type
+        )
+    
+    async def wait_for_shutdown(self):
+        """Wait for shutdown signal."""
+        await self.shutdown_event.wait()
+    
+    def get_status(self):
+        """Get peer status."""
+        return {
+            'running': self.running,
+            'port': self.port,
+            'download_dir': str(self.download_dir),
+            'torrents': self.scheduler.get_all_sessions()
+        }
+    
+    async def recheck_seeded(self):
+        """Trigger recheck of seeded files for all torrents."""
+        for session in self.scheduler.torrent_sessions.values():
+            await session.storage.recheck_seeded_files()
+
+
+

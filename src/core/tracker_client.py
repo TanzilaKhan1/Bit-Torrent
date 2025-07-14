@@ -1,3 +1,7 @@
+#Bit-Torrent/src/core/tracker_client.py
+
+
+
 import asyncio
 import struct
 import urllib.parse
@@ -57,9 +61,10 @@ class HTTPTrackerClient:
         """Make an announce request to an HTTP tracker."""
         await self.rate_limiter.acquire()
         
+        # URL-encode the binary parameters for HTTP transmission
         params = {
-            'info_hash': info_hash,
-            'peer_id': peer_id,
+            'info_hash': urllib.parse.quote(info_hash, safe=''),
+            'peer_id': urllib.parse.quote(peer_id, safe=''),
             'port': port,
             'uploaded': uploaded,
             'downloaded': downloaded,
