@@ -117,6 +117,9 @@ class BitfieldFixedPeerConnection:
         self.bitfield_sent = False
         self.bitfield_received = False
         
+        # Track if connection closed message has been logged
+        self.connection_closed_logged = False
+        
         # Message handlers
         self.message_handlers = {
             MessageType.CHOKE: self._handle_choke,
@@ -319,6 +322,7 @@ class BitfieldFixedPeerConnection:
             logger.error(f"❌ Error creating bitfield for {self.host}:{self.port}: {e}")
             return b''
     
+    
     async def _message_receive_loop(self):
         """Receive messages and put them in queue."""
         while self.connected and self.processing_messages:
@@ -328,9 +332,18 @@ class BitfieldFixedPeerConnection:
                     await self.message_queue.put(message)
                 else:
                     await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"❌ Error receiving message from {self.host}:{self.port}: {e}")
+            except (asyncio.IncompleteReadError, ConnectionResetError, OSError) as e:
+                logger.info(f"Disconnected from {self.host}:{self.port} due to: {e}")
+                await self.disconnect()
                 break
+            except Exception as e:
+                logger.error(f"Error receiving message from {self.host}:{self.port}: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                await self.disconnect()
+                break
+            
+    
     
     async def _message_process_loop(self):
         """Process messages from queue."""
@@ -341,9 +354,17 @@ class BitfieldFixedPeerConnection:
                 await self._process_message(message)
             except asyncio.TimeoutError:
                 continue
+            except (ConnectionResetError, OSError) as e:
+                logger.info(f"Disconnected from {self.host}:{self.port} due to: {e}")
+                await self.disconnect()
+                break
             except Exception as e:
-                logger.error(f"❌ Error processing message from {self.host}:{self.port}: {e}")
-    
+                logger.error(f"Error processing message from {self.host}:{self.port}: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                await self.disconnect()
+                break
+
     async def _receive_message(self) -> Optional[PeerMessage]:
         """Receive a message with proper error handling."""
         try:
@@ -353,48 +374,63 @@ class BitfieldFixedPeerConnection:
             except asyncio.TimeoutError:
                 logger.debug(f"⏰ Message read timeout from {self.host}:{self.port}")
                 return None
-            except asyncio.IncompleteReadError:
-                logger.info(f"📉 Connection closed by {self.host}:{self.port}")
+            except (asyncio.IncompleteReadError, ConnectionResetError, OSError) as e:
+                if not self.connection_closed_logged:
+                    logger.info(f"Connection closed by {self.host}:{self.port}: {e}")
+                    self.connection_closed_logged = True
+                self.connected = False
                 return None
-            
+        
             message_length = struct.unpack('>I', length_data)[0]
-            
+        
             # Handle keep-alive message
             if message_length == 0:
                 self.last_activity = time.time()
                 logger.debug(f"💓 Keep-alive from {self.host}:{self.port}")
                 return None
-            
+        
             # Validate message length
             if message_length > 1024 * 1024:  # 1MB limit
                 logger.error(f"❌ Message too large from {self.host}:{self.port}: {message_length}")
                 return None
-            
+        
             # Read message data
             try:
                 message_data = await asyncio.wait_for(self.reader.readexactly(message_length), timeout=30.0)
-            except asyncio.TimeoutError:
-                logger.debug(f"⏰ Message data timeout from {self.host}:{self.port}")
+            except (asyncio.IncompleteReadError, ConnectionResetError, OSError) as e:
+                if not self.connection_closed_logged:
+                    logger.info(f"Incomplete message or connection closed by {self.host}:{self.port}: {e}")
+                    self.connection_closed_logged = True
+                self.connected = False
                 return None
-            except asyncio.IncompleteReadError:
-                logger.info(f"📉 Incomplete message from {self.host}:{self.port}")
-                return None
-            
+        
             if len(message_data) < 1:
                 logger.error(f"❌ Empty message from {self.host}:{self.port}")
                 return None
-            
+        
             message_type = MessageType(message_data[0])
             payload = message_data[1:] if message_length > 1 else b''
-            
+        
             self.last_activity = time.time()
             logger.debug(f"📨 Received {message_type.name} from {self.host}:{self.port} ({len(payload)} bytes)")
-            
+        
             return PeerMessage(message_type, payload)
-            
-        except Exception as e:
-            logger.error(f"❌ Error receiving message from {self.host}:{self.port}: {e}")
+        
+        except (ConnectionResetError, OSError) as e:
+            if not self.connection_closed_logged:
+                logger.info(f"Connection error with {self.host}:{self.port}: {e}")
+                self.connection_closed_logged = True
+            self.connected = False
             return None
+        except Exception as e:
+            logger.error(f"Error receiving message from {self.host}:{self.port}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+        
+        
+    
+    
     
     async def _process_message(self, message: PeerMessage):
         """Process a received message."""

@@ -323,6 +323,8 @@ class BitfieldFixedTorrentScheduler:
         session.state = TorrentState.STOPPED
         logger.info(f"Stopped session for {session.metadata.name}")
     
+    
+    
     async def _manage_trackers(self, session: BitfieldFixedTorrentSession):
         """Manage tracker announcements."""
         try:
@@ -331,16 +333,27 @@ class BitfieldFixedTorrentScheduler:
                 await self._announce_to_trackers(session, TrackerEvent.COMPLETED)
             else:
                 await self._announce_to_trackers(session, TrackerEvent.STARTED)
-            
+        
             # Periodic announces
             while session.state in [TorrentState.DOWNLOADING, TorrentState.SEEDING]:
-                await asyncio.sleep(30)
-                await self._announce_to_trackers(session, TrackerEvent.NONE)
-                
+                try:
+                    await asyncio.sleep(30)
+                    await self._announce_to_trackers(session, TrackerEvent.NONE)
+                except Exception as e:
+                    logger.error(f"Error in periodic tracker announcement: {e}")
+                    continue  # Continue the loop instead of crashing
         except asyncio.CancelledError:
             logger.info(f"Tracker management cancelled")
         except Exception as e:
-            logger.error(f"Error in tracker management: {e}")
+            logger.error(f"Critical error in tracker management: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Continue running instead of terminating
+            session.state = TorrentState.ERROR
+            await asyncio.sleep(5)  # Prevent tight loop on critical error
+            await self._manage_trackers(session)  # Restart tracker management
+    
+    
     
     async def _announce_to_trackers(self, session: BitfieldFixedTorrentSession, event: TrackerEvent):
         """Announce to trackers and connect to peers."""
@@ -445,6 +458,8 @@ class BitfieldFixedTorrentScheduler:
         
         logger.info(f"Total connected peers: {len(session.peer_connections)}")
     
+    
+    
     async def _stats_loop(self):
         """Background statistics update loop."""
         while self.running:
@@ -495,12 +510,15 @@ class BitfieldFixedTorrentScheduler:
                         logger.info(f"🔄 State changed: {old_state.value} -> {self.session.state.value}")
                 
                 await asyncio.sleep(2.0)
-                
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in stats loop: {e}")
-                await asyncio.sleep(2.0)
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                await asyncio.sleep(2.0)  # Continue the loop instead of crashing
+    
+    
     
     def get_session_stats(self) -> Optional[Dict]:
         """Get session statistics."""

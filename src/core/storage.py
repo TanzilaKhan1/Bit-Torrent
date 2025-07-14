@@ -413,7 +413,7 @@ class FixedTorrentStorage:
         )
 
 class FixedPeerStorage(FixedTorrentStorage):
-    """FIXED: Enhanced storage for peer-to-peer with seeded/downloaded separation."""
+    """Storage for peer-to-peer with downloaded files."""
     
     def __init__(self, metadata: TorrentMetadata, peer_dir: str):
         super().__init__(metadata, download_dir=os.path.join(peer_dir, "downloaded"))
