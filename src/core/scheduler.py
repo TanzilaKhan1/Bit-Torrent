@@ -76,8 +76,8 @@ class BitfieldFixedTorrentSession:
             peer_downloaded += downloaded
             peer_uploaded += uploaded
     
-        # Update totals
-        self.total_downloaded = peer_downloaded  # Use only peer_downloaded
+        # CRITICAL FIX: Use storage downloaded bytes for total_downloaded
+        self.total_downloaded = storage_downloaded  # Use storage downloaded bytes
         self.total_uploaded = peer_uploaded
     
         # Calculate rates
@@ -124,9 +124,8 @@ class BitfieldFixedTorrentScheduler:
         self.tracker_url = "http://localhost:8080/announce"
         
         # DHT for peer discovery
-        self.dht = DHT(port=listen_port + 1000)  # Use different port for DHT
+        self.dht = DHT(port=listen_port + 1000)  
         
-        # Peer Discovery Coordinator (manages all discovery methods)
         self.peer_discovery = PeerDiscoveryCoordinator(
             peer_port=listen_port,
             tracker_urls=[self.tracker_url] if self.tracker_url else []
@@ -240,6 +239,9 @@ class BitfieldFixedTorrentScheduler:
             # Create piece manager
             piece_manager = PieceManager(metadata, storage)
             
+            # FORCE DISCOVERY: Set callback for triggering peer discovery
+            piece_manager.set_peer_discovery_callback(self._force_peer_discovery)
+            
             # Create tracker manager
             trackers = [self.tracker_url]
             if metadata.trackers:
@@ -267,6 +269,9 @@ class BitfieldFixedTorrentScheduler:
             self.session.total_downloaded = storage.get_downloaded_bytes()
             self.session.last_downloaded = self.session.total_downloaded
             self.session.last_stats_update = time.time()
+            
+            # CRITICAL FIX: Log initial statistics
+            logger.info(f"📊 Initial statistics: Downloaded {format_bytes(self.session.total_downloaded)}, Remaining {format_bytes(storage.get_remaining_bytes())}")
             
             # Start session
             await self._start_session(self.session)
@@ -311,7 +316,10 @@ class BitfieldFixedTorrentScheduler:
                 'name': session.metadata.name,
                 'peer_id': session.peer_id,
                 'total_size': session.metadata.total_size,
-                'piece_count': len(session.metadata.pieces_hash_list)
+                'piece_count': len(session.metadata.pieces_hash_list),
+                'uploaded': session.total_uploaded,
+                'downloaded': session.total_downloaded,
+                'left': session.storage.get_remaining_bytes()
             }
             self.peer_discovery.add_torrent(session.info_hash, torrent_metadata)
             
@@ -417,6 +425,37 @@ class BitfieldFixedTorrentScheduler:
             logger.error(f"❌ DHT peer discovery failed: {e}")
             return []
     
+    async def _force_peer_discovery(self):
+        """Force immediate peer discovery for active torrent."""
+        try:
+            if self.session:
+                logger.info("🔍 FORCE DISCOVERY: Triggering immediate peer discovery")
+                
+                # Update torrent metadata with current stats
+                torrent_metadata = {
+                    'name': self.session.metadata.name,
+                    'peer_id': self.session.peer_id,
+                    'total_size': self.session.metadata.total_size,
+                    'piece_count': len(self.session.metadata.pieces_hash_list),
+                    'uploaded': self.session.total_uploaded,
+                    'downloaded': self.session.total_downloaded,
+                    'left': self.session.storage.get_remaining_bytes(),
+                    'event': TrackerEvent.NONE
+                }
+                self.peer_discovery.active_torrents[self.session.info_hash] = torrent_metadata
+                
+                # Force discovery
+                peers = await self.peer_discovery.discover_peers(self.session.info_hash)
+                
+                if peers:
+                    logger.info(f"🔍 FORCE DISCOVERY: Found {len(peers)} peers")
+                    await self._connect_to_peers(self.session, peers)
+                else:
+                    logger.info("🔍 FORCE DISCOVERY: No new peers found")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error in forced peer discovery: {e}")
+    
     async def _manage_dht_announces(self, session: BitfieldFixedTorrentSession):
         """Manage DHT announcements."""
         logger.info(f"🌐 Starting DHT announce management for {session.metadata.name}")
@@ -440,6 +479,12 @@ class BitfieldFixedTorrentScheduler:
         """Announce to trackers and connect to peers using full hierarchy."""
         # Use the new peer discovery coordinator
         try:
+            # Update statistics before announcing
+            session.update_statistics()
+            
+            logger.info(f"📢 Announcing to trackers: {event.value}")
+            logger.info(f"📢 Announce stats: Downloaded {format_bytes(session.total_downloaded)}, Uploaded {format_bytes(session.total_uploaded)}, Left {format_bytes(session.storage.get_remaining_bytes())}")
+            
             # Update torrent metadata in coordinator
             torrent_metadata = {
                 'name': session.metadata.name,

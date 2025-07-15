@@ -6,6 +6,8 @@ import socket
 import struct
 import time
 import random
+import json
+import os
 from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass
 from hashlib import sha1
@@ -152,12 +154,16 @@ class DHTRoutingTable:
         return len(self.get_all_nodes())
 
 class DHT:
-    """Implements BitTorrent DHT (BEP-0005)."""
+    """Implements BitTorrent DHT (BEP-0005) with persistence support."""
     
-    def __init__(self, node_id: Optional[bytes] = None, port: int = 6881):
+    def __init__(self, node_id: Optional[bytes] = None, port: int = 6881, persist_file: str = "dht_data.json"):
         self.node_id = node_id or self._generate_node_id()
         self.port = port
+        self.persist_file = persist_file
         self.routing_table = DHTRoutingTable(self.node_id)
+        
+        # Load persisted data
+        self._load_persistence()
         
         # Networking
         self.sock = None
@@ -189,8 +195,117 @@ class DHT:
         # Maintenance
         self.maintenance_task = None
         self.message_handler_task = None
+        self.persist_task = None
         
         logger.info(f"Initialized DHT with node ID: {self.node_id.hex()}")
+    
+    def _load_persistence(self):
+        """Load DHT data from persistence file."""
+        try:
+            if os.path.exists(self.persist_file):
+                with open(self.persist_file, 'r') as f:
+                    data = json.load(f)
+                    
+                    # Restore node ID if it was persisted
+                    if 'node_id' in data:
+                        self.node_id = bytes.fromhex(data['node_id'])
+                    
+                    # Restore routing table nodes
+                    if 'routing_table' in data:
+                        for node_data in data['routing_table']:
+                            try:
+                                node_id = bytes.fromhex(node_data['node_id'])
+                                host = node_data['host']
+                                port = node_data['port']
+                                
+                                # Only restore recent nodes (less than 1 hour old)
+                                if time.time() - node_data.get('last_seen', 0) < 3600:
+                                    node = DHTNode(node_id, host, port)
+                                    node.last_seen = node_data.get('last_seen', time.time())
+                                    self.routing_table.add_node(node)
+                            except Exception as e:
+                                logger.warning(f"Failed to restore node: {e}")
+                    
+                    # Restore peer store
+                    if 'peer_store' in data:
+                        for info_hash_hex, peers_data in data['peer_store'].items():
+                            try:
+                                info_hash = bytes.fromhex(info_hash_hex)
+                                self.peer_store[info_hash] = {}
+                                
+                                for peer_id_hex, peer_info in peers_data.items():
+                                    peer_id = bytes.fromhex(peer_id_hex)
+                                    host, port, timestamp = peer_info
+                                    
+                                    # Only restore recent peers (less than 30 minutes old)
+                                    if time.time() - timestamp < 1800:
+                                        self.peer_store[info_hash][peer_id] = (host, port, timestamp)
+                            except Exception as e:
+                                logger.warning(f"Failed to restore peer: {e}")
+                    
+                    logger.info(f"Loaded DHT data from {self.persist_file}")
+                    logger.info(f"  Routing table: {self.routing_table.get_node_count()} nodes")
+                    logger.info(f"  Peer store: {len(self.peer_store)} torrents")
+            else:
+                logger.info("No DHT persistence file found, starting fresh")
+                
+        except Exception as e:
+            logger.error(f"Failed to load DHT persistence: {e}")
+    
+    def _save_persistence(self):
+        """Save DHT data to persistence file."""
+        try:
+            # Prepare data for JSON serialization
+            data = {
+                'node_id': self.node_id.hex(),
+                'routing_table': [],
+                'peer_store': {},
+                'saved_at': time.time()
+            }
+            
+            # Save routing table nodes
+            for node in self.routing_table.get_all_nodes():
+                data['routing_table'].append({
+                    'node_id': node.node_id.hex(),
+                    'host': node.host,
+                    'port': node.port,
+                    'last_seen': node.last_seen
+                })
+            
+            # Save peer store
+            for info_hash, peers in self.peer_store.items():
+                info_hash_hex = info_hash.hex()
+                data['peer_store'][info_hash_hex] = {}
+                
+                for peer_id, (host, port, timestamp) in peers.items():
+                    peer_id_hex = peer_id.hex()
+                    data['peer_store'][info_hash_hex][peer_id_hex] = [host, port, timestamp]
+            
+            # Write to temporary file first for atomic operation
+            temp_file = f"{self.persist_file}.tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            # Rename for atomic operation
+            os.rename(temp_file, self.persist_file)
+            
+            logger.debug(f"Saved DHT data to {self.persist_file}")
+            logger.debug(f"  Routing table: {len(data['routing_table'])} nodes")
+            logger.debug(f"  Peer store: {len(data['peer_store'])} torrents")
+            
+        except Exception as e:
+            logger.error(f"Failed to save DHT persistence: {e}")
+    
+    async def _periodic_persistence(self):
+        """Periodically save DHT data to disk."""
+        while self.running:
+            try:
+                await asyncio.sleep(300)  # Save every 5 minutes
+                self._save_persistence()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic DHT persistence: {e}")
     
     def _generate_node_id(self) -> bytes:
         """Generate a random 20-byte node ID."""
@@ -227,6 +342,9 @@ class DHT:
             # Start maintenance task
             self.maintenance_task = asyncio.create_task(self._maintenance_loop())
             
+            # Start persistence task
+            self.persist_task = asyncio.create_task(self._periodic_persistence())
+            
             # Bootstrap
             await self._bootstrap()
             
@@ -248,6 +366,11 @@ class DHT:
             self.message_handler_task.cancel()
         if self.maintenance_task:
             self.maintenance_task.cancel()
+        if self.persist_task:
+            self.persist_task.cancel()
+        
+        # Save data before shutdown
+        self._save_persistence()
         
         # Close socket
         if self.sock:
@@ -578,13 +701,22 @@ class DHT:
         info_hash = message.arguments.get(b'info_hash')
         peer_id = message.arguments.get(b'id')
         announced_port = message.arguments.get(b'port')
+        implied_port = message.arguments.get(b'implied_port', 0)
         
-        if info_hash and peer_id and announced_port and len(info_hash) == 20:
-            # Use the announced port if provided, otherwise use the source port
-            if isinstance(announced_port, int):
-                peer_port = announced_port
-            else:
+        if info_hash and peer_id and len(info_hash) == 20:
+            # Determine the port to use
+            if implied_port:
+                # Use the source port from the UDP packet
                 peer_port = port
+                logger.debug(f"Using implied port {peer_port} for peer announcement")
+            elif announced_port and isinstance(announced_port, int):
+                # Use the explicitly announced port
+                peer_port = announced_port
+                logger.debug(f"Using announced port {peer_port} for peer announcement")
+            else:
+                # Fallback to source port
+                peer_port = port
+                logger.debug(f"Using source port {peer_port} for peer announcement")
             
             # Store peer in peer_store
             if info_hash not in self.peer_store:
@@ -797,9 +929,9 @@ class DHT:
         
         return peers
     
-    async def announce_peer(self, info_hash: bytes, port: int) -> bool:
-        """Announce ourselves as a peer for a torrent."""
-        logger.info(f"Announcing peer for info_hash {info_hash.hex()[:16]} on port {port}")
+    async def announce_peer(self, info_hash: bytes, port: int, implied_port: bool = False) -> bool:
+        """Announce ourselves as a peer for a torrent with implied port support."""
+        logger.info(f"Announcing peer for info_hash {info_hash.hex()[:16]} on port {port}, implied_port={implied_port}")
         
         # Find nodes close to the info hash
         closest_nodes = self.routing_table.find_closest_nodes(info_hash, 8)
@@ -826,9 +958,16 @@ class DHT:
                     announce_args = {
                         b'id': self.node_id,
                         b'info_hash': info_hash,
-                        b'port': port,
                         b'token': response[b'token']
                     }
+                    
+                    # Handle implied port flag
+                    if implied_port:
+                        # Use the source port from the get_peers query
+                        announce_args[b'implied_port'] = 1
+                    else:
+                        # Use the explicitly specified port
+                        announce_args[b'port'] = port
                     
                     announce_response = await self._send_query('announce_peer', announce_args, (node.host, node.port))
                     

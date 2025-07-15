@@ -4,16 +4,53 @@
 
 import asyncio
 import time
+import hashlib
+import json
+import pickle
+import os
 from typing import Dict, Set, List, Tuple, Optional
 from dataclasses import dataclass, field
 from aiohttp import web
-import json
 import urllib.parse
 from urllib.parse import unquote_plus
 
 from .utils import get_logger, parse_compact_peers, format_compact_peers
 
 logger = get_logger(__name__)
+
+def canonicalize_info_hash(info_hash_param: str) -> bytes:
+    """Canonicalize info_hash parameter to prevent encoding bypass."""
+    try:
+        # URL decode to bytes
+        decoded = urllib.parse.unquote_to_bytes(info_hash_param)
+        
+        # Validate length
+        if len(decoded) != 20:
+            raise ValueError(f"Invalid info_hash length: {len(decoded)}")
+            
+        return decoded
+    except Exception as e:
+        logger.error(f"Failed to canonicalize info_hash '{info_hash_param}': {e}")
+        raise ValueError("Invalid info_hash encoding")
+
+def canonicalize_peer_id(peer_id_param: str) -> bytes:
+    """Canonicalize peer_id parameter to prevent encoding bypass."""
+    try:
+        # URL decode to bytes
+        decoded = urllib.parse.unquote_to_bytes(peer_id_param)
+        
+        # Validate length
+        if len(decoded) != 20:
+            raise ValueError(f"Invalid peer_id length: {len(decoded)}")
+            
+        return decoded
+    except Exception as e:
+        logger.error(f"Failed to canonicalize peer_id '{peer_id_param}': {e}")
+        raise ValueError("Invalid peer_id encoding")
+
+def generate_tracker_id() -> str:
+    """Generate a unique tracker ID for peer session tracking."""
+    return hashlib.sha1(f"{time.time()}{os.urandom(8)}".encode()).hexdigest()[:16]
 
 @dataclass
 class PeerInfo:
@@ -26,6 +63,7 @@ class PeerInfo:
     left: int = 0
     last_announce: float = field(default_factory=time.time)
     completed: bool = False
+    tracker_id: str = field(default_factory=generate_tracker_id)
     
     def is_seeder(self) -> bool:
         """Check if peer is a seeder."""
@@ -65,16 +103,18 @@ class TorrentSwarm:
 class LocalTracker:
     """Local BitTorrent tracker for peer discovery."""
     
-    def __init__(self, host: str = "localhost", port: int = 8080):
+    def __init__(self, host: str = "localhost", port: int = 8080, persist_file: str = "tracker_data.pkl"):
         self.host = host
         self.port = port
+        self.persist_file = persist_file
         self.app = web.Application()
         self.runner = None
         self.site = None
         self.running = False
         
-        # Torrent swarms
+        # Torrent swarms - load from persistence if available
         self.swarms: Dict[bytes, TorrentSwarm] = {}
+        self._load_persistence()
         
         # Statistics
         self.total_announces = 0
@@ -87,10 +127,63 @@ class LocalTracker:
         self.app.router.add_get('/stats', self._handle_stats)
         self.app.router.add_get('/peers/{info_hash}', self._handle_peers)
         
-        # Background cleanup task
+        # Background tasks
         self.cleanup_task = None
+        self.persist_task = None
         
-        logger.info(f"Initialized local tracker on {host}:{port}")
+        logger.info(f"Initialized local tracker on {host}:{port} with persistence at {persist_file}")
+    
+    def _load_persistence(self):
+        """Load tracker data from persistence file."""
+        try:
+            if os.path.exists(self.persist_file):
+                with open(self.persist_file, 'rb') as f:
+                    data = pickle.load(f)
+                    self.swarms = data.get('swarms', {})
+                    self.total_announces = data.get('total_announces', 0)
+                    self.total_scrapes = data.get('total_scrapes', 0)
+                    
+                    # Clean up expired peers on load
+                    for swarm in self.swarms.values():
+                        swarm.cleanup_expired_peers()
+                    
+                    logger.info(f"Loaded {len(self.swarms)} swarms from persistence")
+            else:
+                logger.info("No persistence file found, starting fresh")
+        except Exception as e:
+            logger.error(f"Failed to load persistence: {e}")
+            self.swarms = {}
+    
+    def _save_persistence(self):
+        """Save tracker data to persistence file."""
+        try:
+            data = {
+                'swarms': self.swarms,
+                'total_announces': self.total_announces,
+                'total_scrapes': self.total_scrapes,
+                'saved_at': time.time()
+            }
+            
+            # Write to temporary file first, then rename for atomic operation
+            temp_file = f"{self.persist_file}.tmp"
+            with open(temp_file, 'wb') as f:
+                pickle.dump(data, f)
+            
+            os.rename(temp_file, self.persist_file)
+            logger.debug(f"Saved {len(self.swarms)} swarms to persistence")
+        except Exception as e:
+            logger.error(f"Failed to save persistence: {e}")
+    
+    async def _periodic_persistence(self):
+        """Periodically save data to disk."""
+        while self.running:
+            try:
+                await asyncio.sleep(300)  # Save every 5 minutes
+                self._save_persistence()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic persistence: {e}")
     
     async def start(self):
         """Start the local tracker."""
@@ -106,8 +199,9 @@ class LocalTracker:
             
             self.running = True
             
-            # Start cleanup task
+            # Start background tasks
             self.cleanup_task = asyncio.create_task(self._cleanup_expired_peers())
+            self.persist_task = asyncio.create_task(self._periodic_persistence())
             
             logger.info(f"Local tracker started on http://{self.host}:{self.port}")
             
@@ -122,9 +216,15 @@ class LocalTracker:
         
         self.running = False
         
-        # Stop cleanup task
+        # Stop background tasks
         if self.cleanup_task:
             self.cleanup_task.cancel()
+        
+        if self.persist_task:
+            self.persist_task.cancel()
+        
+        # Save data before shutdown
+        self._save_persistence()
         
         # Stop web server
         if self.site:
@@ -142,25 +242,17 @@ class LocalTracker:
             params = request.query
             
             # Required parameters - decode URL-encoded values to bytes
-            info_hash = params.get('info_hash', '')
+            info_hash_param = params.get('info_hash', '')
             try:
-                info_hash = urllib.parse.unquote_to_bytes(info_hash)
-            except:
-                return web.Response(text="Invalid info_hash encoding", status=400)
+                info_hash = canonicalize_info_hash(info_hash_param)
+            except ValueError as e:
+                return web.Response(text=str(e), status=400)
             
-            if len(info_hash) != 20:
-                return web.Response(text="Invalid info_hash", status=400)
-            
-            peer_id = params.get('peer_id', '')
+            peer_id_param = params.get('peer_id', '')
             try:
-                peer_id = urllib.parse.unquote_to_bytes(peer_id)
-            except Exception as e:
-                logger.error(f"Peer ID decoding error: {e}")
-                return web.Response(text="Invalid peer_id encoding", status=400)
-            
-            if len(peer_id) != 20:
-                logger.error(f"Invalid peer_id length: {len(peer_id)}, expected 20")
-                return web.Response(text="Invalid peer_id", status=400)
+                peer_id = canonicalize_peer_id(peer_id_param)
+            except ValueError as e:
+                return web.Response(text=str(e), status=400)
             
             port = int(params.get('port', 0))
             if port <= 0 or port > 65535:
@@ -202,6 +294,10 @@ class LocalTracker:
                 
                 return web.Response(text="OK", status=200)
             
+            # Handle completed event - properly decrement left field
+            if event == 'completed':
+                left = 0  # Force left to 0 when completed
+                
             # Update peer info
             peer_info = PeerInfo(
                 peer_id=peer_id,
@@ -216,6 +312,10 @@ class LocalTracker:
             
             swarm.peers[peer_id] = peer_info
             self.total_announces += 1
+            
+            # Save persistence after peer update (but not too frequently)
+            if self.total_announces % 10 == 0:  # Save every 10 announces
+                self._save_persistence()
             
             logger.info(f"Announce from {client_ip}:{port} for {info_hash.hex()[:8]}, "
                        f"up: {uploaded}, down: {downloaded}, left: {left}")
@@ -236,7 +336,12 @@ class LocalTracker:
                 'min interval': 300,  # 5 minutes
                 'complete': len(swarm.get_seeders()),
                 'incomplete': len(swarm.get_leechers()),
+                'tracker id': peer_info.tracker_id,  # Add tracker_id for session tracking
             }
+            
+            # Add warning message if needed
+            if len(swarm.get_active_peers()) > 1000:
+                response_dict['warning message'] = 'Large swarm: performance may be degraded'
             
             if compact:
                 # Compact format
@@ -281,26 +386,42 @@ class LocalTracker:
             
             if info_hash_param:
                 # Scrape specific torrent
-                info_hash = info_hash_param.encode('latin-1')
-                if info_hash in self.swarms:
-                    swarm = self.swarms[info_hash]
-                    swarm.cleanup_expired_peers()
-                    
-                    response_dict['files'][info_hash] = {
-                        'complete': len(swarm.get_seeders()),
-                        'incomplete': len(swarm.get_leechers()),
-                        'downloaded': len(swarm.peers)
-                    }
+                try:
+                    info_hash = canonicalize_info_hash(info_hash_param)
+                    if info_hash in self.swarms:
+                        swarm = self.swarms[info_hash]
+                        swarm.cleanup_expired_peers()
+                        
+                        # Use string key for better client compatibility
+                        # Some clients expect hex strings, others expect raw bytes
+                        file_info = {
+                            'complete': len(swarm.get_seeders()),
+                            'incomplete': len(swarm.get_leechers()),
+                            'downloaded': len(swarm.peers)
+                        }
+                        
+                        # Add both string and bytes keys for maximum compatibility
+                        response_dict['files'][info_hash.hex()] = file_info
+                        response_dict['files'][info_hash] = file_info
+                except ValueError:
+                    # Skip invalid info_hash
+                    pass
             else:
                 # Scrape all torrents
                 for info_hash, swarm in self.swarms.items():
                     swarm.cleanup_expired_peers()
                     
-                    response_dict['files'][info_hash] = {
+                    # Use string key for better client compatibility
+                    # Some clients expect hex strings, others expect raw bytes
+                    file_info = {
                         'complete': len(swarm.get_seeders()),
                         'incomplete': len(swarm.get_leechers()),
                         'downloaded': len(swarm.peers)
                     }
+                    
+                    # Add both string and bytes keys for maximum compatibility
+                    response_dict['files'][info_hash.hex()] = file_info
+                    response_dict['files'][info_hash] = file_info
             
             import bencodepy
             response_data = bencodepy.encode(response_dict)

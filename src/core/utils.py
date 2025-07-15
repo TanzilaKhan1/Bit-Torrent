@@ -208,8 +208,8 @@ def validate_info_hash(info_hash: Union[str, bytes]) -> bytes:
     else:
         raise ValueError("Info hash must be str or bytes")
 
-def create_handshake_message(info_hash: bytes, peer_id: bytes) -> bytes:
-    """Create BitTorrent handshake message."""
+def create_handshake_message(info_hash: bytes, peer_id: bytes, extensions: dict = None) -> bytes:
+    """Create BitTorrent handshake message with extension support."""
     if len(info_hash) != 20:
         raise ValueError("Info hash must be 20 bytes")
     if len(peer_id) != 20:
@@ -217,24 +217,70 @@ def create_handshake_message(info_hash: bytes, peer_id: bytes) -> bytes:
     
     protocol_name = b'BitTorrent protocol'
     protocol_length = len(protocol_name)
-    reserved = b'\x00' * 8  # 8 reserved bytes
+    
+    # Create reserved bytes with extension flags
+    reserved = bytearray(8)
+    
+    # Set extension flags if provided
+    if extensions:
+        # DHT support (BEP-0005) - bit 63 (last bit of last byte)
+        if extensions.get('dht', False):
+            reserved[7] |= 0x01
+        
+        # Fast extension (BEP-0006) - bit 61 (bit 2 of last byte)
+        if extensions.get('fast', False):
+            reserved[7] |= 0x04
+        
+        # Extension protocol (BEP-0010) - bit 43 (bit 5 of 6th byte)
+        if extensions.get('extension_protocol', False):
+            reserved[5] |= 0x10
+        
+        # µTP support - bit 40 (bit 0 of 6th byte)
+        if extensions.get('utp', False):
+            reserved[5] |= 0x01
+        
+        # Encryption support (BEP-0027) - bit 47 (bit 1 of 6th byte)
+        if extensions.get('encryption', False):
+            reserved[5] |= 0x02
     
     return (
         bytes([protocol_length]) + 
         protocol_name + 
-        reserved + 
+        bytes(reserved) + 
         info_hash + 
         peer_id
     )
 
-def parse_handshake_message(data: bytes) -> Optional[Tuple[bytes, bytes]]:
-    """Parse BitTorrent handshake message."""
+def parse_handshake_message(data: bytes) -> Optional[Tuple[bytes, bytes, dict]]:
+    """Parse BitTorrent handshake message with extension support."""
     if len(data) < 68:  # Minimum handshake size
         return None
     
     protocol_length = data[0]
     if protocol_length != 19:  # "BitTorrent protocol" length
         return None
+    
+    # Extract reserved bytes
+    reserved_start = 1 + protocol_length
+    reserved_bytes = data[reserved_start:reserved_start + 8]
+    
+    # Parse extension flags
+    extensions = {}
+    if len(reserved_bytes) == 8:
+        # DHT support (BEP-0005) - bit 63 (last bit of last byte)
+        extensions['dht'] = (reserved_bytes[7] & 0x01) != 0
+        
+        # Fast extension (BEP-0006) - bit 61 (bit 2 of last byte)
+        extensions['fast'] = (reserved_bytes[7] & 0x04) != 0
+        
+        # Extension protocol (BEP-0010) - bit 43 (bit 5 of 6th byte)
+        extensions['extension_protocol'] = (reserved_bytes[5] & 0x10) != 0
+        
+        # µTP support - bit 40 (bit 0 of 6th byte)
+        extensions['utp'] = (reserved_bytes[5] & 0x01) != 0
+        
+        # Encryption support (BEP-0027) - bit 47 (bit 1 of 6th byte)
+        extensions['encryption'] = (reserved_bytes[5] & 0x02) != 0
     
     expected_start = 1 + protocol_length + 8  # 1 + protocol + reserved
     if len(data) < expected_start + 40:  # Need 20 bytes for info_hash + 20 for peer_id
@@ -243,4 +289,4 @@ def parse_handshake_message(data: bytes) -> Optional[Tuple[bytes, bytes]]:
     info_hash = data[expected_start:expected_start + 20]
     peer_id = data[expected_start + 20:expected_start + 40]
     
-    return info_hash, peer_id
+    return info_hash, peer_id, extensions

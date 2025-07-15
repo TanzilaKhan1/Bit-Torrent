@@ -110,12 +110,16 @@ class FixedTorrentStorage:
         logger.info(f"📁 Created file structure for {len(self.metadata.files)} files")
     
     async def initialize_existing_pieces(self):
-        """FIXED: Synchronously check for existing pieces."""
+        """FIXED: Async check for existing pieces with periodic yielding."""
         try:
             logger.info("🔍 Checking for existing pieces...")
             
             verified_count = 0
             for piece_index in range(self.total_pieces):
+                # Yield control every 10 pieces to prevent blocking
+                if piece_index % 10 == 0:
+                    await asyncio.sleep(0.001)  # Small yield to prevent blocking
+                    
                 if await self.verify_piece(piece_index):
                     verified_count += 1
                     if verified_count <= 3:  # Log first few for debugging
@@ -309,7 +313,7 @@ class FixedTorrentStorage:
             return None
     
     async def verify_piece(self, piece_index: int) -> bool:
-        """Verify a piece's hash."""
+        """Verify a piece's hash with async hashing to prevent blocking."""
         if piece_index not in self.pieces_info:
             logger.error(f"❌ Piece {piece_index} not found in pieces_info")
             return False
@@ -323,7 +327,8 @@ class FixedTorrentStorage:
                 logger.debug(f"🔍 Verifying piece {piece_index}: got {len(data)} bytes, expected {piece_info.length}")
                 
                 if len(data) == piece_info.length:
-                    piece_hash = hashlib.sha1(data).digest()
+                    # Hash in chunks to prevent blocking for large pieces
+                    piece_hash = await self._hash_data_async(data)
                     expected_hash = piece_info.hash
                     
                     if piece_hash == expected_hash:
@@ -345,6 +350,21 @@ class FixedTorrentStorage:
         except Exception as e:
             logger.error(f"❌ Failed to verify piece {piece_index}: {e}")
             return False
+    
+    async def _hash_data_async(self, data: bytes) -> bytes:
+        """Hash data in chunks to prevent blocking the event loop."""
+        hasher = hashlib.sha1()
+        chunk_size = 8192  # 8KB chunks
+        
+        for i in range(0, len(data), chunk_size):
+            chunk = data[i:i + chunk_size]
+            hasher.update(chunk)
+            
+            # Yield control every few chunks to prevent blocking
+            if i % (chunk_size * 10) == 0:
+                await asyncio.sleep(0.001)
+        
+        return hasher.digest()
     
     def get_piece_info(self, piece_index: int) -> Optional[PieceInfo]:
         """Get information about a piece."""

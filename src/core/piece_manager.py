@@ -3,14 +3,7 @@
 #Bit-Torrent/src/core/piece_manager.py
 
 """
-BITFIELD FIX: Piece Manager with Proper Bitfield Callback Processing
-===================================================================
-
-Key fixes:
-1. Ensure bitfield callbacks are processed immediately when called
-2. Fix race conditions in piece management
-3. Add comprehensive logging for debugging bitfield issues
-4. Proper request management and timeout handling
+Piece Manager with Proper Bitfield Callback Processing
 """
 
 import asyncio
@@ -24,6 +17,7 @@ from .utils import get_logger, AsyncQueue
 from .storage import TorrentStorage, PieceInfo
 from .peer_connection import PeerConnection, PieceBlock
 from .torrent_parser import TorrentMetadata
+from .piece_selection import PieceSelector, PiecePriority
 
 logger = get_logger(__name__)
 
@@ -148,6 +142,9 @@ class BitfieldFixedPieceManager:
         # Peer management
         self.peers: Dict[str, BitfieldFixedPeerInfo] = {}
         
+        # Real BitTorrent piece selection system
+        self.piece_selector = PieceSelector(self.total_pieces, self.piece_length)
+        
         # Statistics
         self.total_downloaded = 0
         self.download_rate = 0.0
@@ -177,7 +174,13 @@ class BitfieldFixedPieceManager:
             if piece_index not in verified_pieces:
                 self.pending_pieces.add(piece_index)
         
-        logger.info(f"🎯 BITFIELD FIX: Piece manager initialized:")
+        # Update piece selector with current state
+        self.piece_selector.completed_pieces = self.completed_pieces.copy()
+        self.piece_selector.pending_pieces = self.pending_pieces.copy()
+        
+        for piece_index in verified_pieces:
+            self.piece_selector.mark_piece_completed(piece_index)
+        
         logger.info(f"   Total pieces: {self.total_pieces}")
         logger.info(f"   Completed pieces: {len(self.completed_pieces)} {sorted(list(self.completed_pieces))}")
         logger.info(f"   Pending pieces: {len(self.pending_pieces)} {sorted(list(self.pending_pieces))}")
@@ -267,6 +270,9 @@ class BitfieldFixedPieceManager:
             peer_info = self.peers[peer_id]
             peer_info.available_pieces = pieces.copy()
             peer_info.bitfield_received = True
+            
+            # Update piece selector with peer availability
+            self.piece_selector.update_peer_pieces(peer_id, pieces)
             
             logger.info(f"📊 BITFIELD FIX: Peer {peer_id} bitfield processed")
             logger.info(f"   Peer now has {len(pieces)} pieces available")
@@ -374,6 +380,12 @@ class BitfieldFixedPieceManager:
                         self.completed_pieces.add(piece_index)
                         self.pending_pieces.discard(piece_index)
                         
+                        # CRITICAL: Update storage verified pieces for announcements
+                        self.storage.verified_pieces.add(piece_index)
+                        
+                        # Update piece selector
+                        self.piece_selector.mark_piece_completed(piece_index)
+                        
                         # BITFIELD FIX: Update all peer connections immediately
                         for peer_info in self.peers.values():
                             peer_info.connection.set_available_pieces(self.completed_pieces)
@@ -384,6 +396,11 @@ class BitfieldFixedPieceManager:
                         elapsed = time.time() - download.start_time
                         logger.info(f"✅ BITFIELD FIX: Completed piece {piece_index} in {elapsed:.1f}s")
                         
+                        # Get piece selection statistics
+                        selection_stats = self.piece_selector.get_piece_statistics()
+                        if selection_stats['in_endgame']:
+                            logger.info(f"🏁 Endgame mode: {selection_stats['pending_pieces']} pieces remaining")
+                        
                         # Update progress
                         downloaded, total, percentage = self.storage.get_progress()
                         logger.info(f"📊 Progress: {downloaded}/{total} pieces ({percentage:.1f}%)")
@@ -391,6 +408,10 @@ class BitfieldFixedPieceManager:
                         # Check if download is complete
                         if self.is_complete():
                             logger.info(f"🎉 DOWNLOAD COMPLETE! All {total} pieces downloaded.")
+                        else:
+                            # FORCE PEER DISCOVERY: Trigger immediate peer discovery after piece completion
+                            logger.info(f"🔍 Triggering peer discovery after piece {piece_index} completion")
+                            asyncio.create_task(self._trigger_peer_discovery())
                     else:
                         logger.error(f"❌ Piece {piece_index} verification failed after writing")
                         self.pending_pieces.add(piece_index)
@@ -430,28 +451,26 @@ class BitfieldFixedPieceManager:
                 self.download_rate = bytes_diff / time_diff
     
     def get_next_piece_to_download(self) -> Optional[Tuple[int, str]]:
-        """BITFIELD FIX: Get next piece with better peer selection and logging."""
+        """Get next piece using  BitTorrent algorithms."""
         if not self.pending_pieces:
             return None
         
-        # Find pieces that have available peers with bitfields
-        available_pieces = []
+        # Try each peer to find the best piece using rarest first
+        best_piece = None
+        best_peer = None
         
-        for piece_index in self.pending_pieces:
-            # Skip if already being downloaded
-            if piece_index in self.active_downloads:
-                continue
+        for peer_id, peer_info in self.peers.items():
+            if peer_info.can_download_piece(0):  # General connectivity check
+                # Use piece selector to get the best piece from this peer
+                piece_index = self.piece_selector.get_next_piece(peer_id)
                 
-            best_peer = None
-            for peer_id, peer_info in self.peers.items():
-                if peer_info.can_download_piece(piece_index):
+                if piece_index is not None:
+                    # First valid piece found
+                    best_piece = piece_index
                     best_peer = peer_id
                     break
-            
-            if best_peer:
-                available_pieces.append((piece_index, best_peer))
         
-        if not available_pieces:
+        if best_piece is None:
             # BITFIELD FIX: Better diagnostic logging
             connected_peers = [pid for pid, pinfo in self.peers.items() if pinfo.is_connected]
             bitfield_peers = [pid for pid, pinfo in self.peers.items() if pinfo.bitfield_received]
@@ -470,11 +489,23 @@ class BitfieldFixedPieceManager:
             
             return None
         
-        # Select first available piece
-        piece_index, peer_id = available_pieces[0]
-        logger.info(f"🎯 BITFIELD FIX: Selected piece {piece_index} from peer {peer_id}")
+        # Mark piece as downloading in selector
+        self.piece_selector.mark_piece_downloading(best_piece)
         
-        return piece_index, peer_id
+        # Get piece selection statistics
+        selection_stats = self.piece_selector.get_piece_statistics()
+        strategy_used = "unknown"
+        if selection_stats['in_endgame']:
+            strategy_used = "endgame"
+        elif selection_stats['selection_stats']['rarest_first'] > 0:
+            strategy_used = "rarest_first"
+        elif selection_stats['selection_stats']['random_first'] > 0:
+            strategy_used = "random_first"
+        
+        logger.info(f"🎯 PIECE SELECTION: Selected piece {best_piece} from peer {best_peer} using {strategy_used}")
+        logger.info(f"   Selection stats: {selection_stats['selection_stats']}")
+        
+        return best_piece, best_peer
     
     async def start_piece_download(self, piece_index: int, peer_id: str) -> bool:
         """Start downloading a piece from a specific peer."""
@@ -683,6 +714,22 @@ class BitfieldFixedPieceManager:
     def is_complete(self) -> bool:
         """Check if all pieces are downloaded."""
         return len(self.pending_pieces) == 0 and len(self.active_downloads) == 0
+    
+    async def _trigger_peer_discovery(self):
+        """Trigger immediate peer discovery for new peers."""
+        try:
+            # This will be called by the scheduler when it's set
+            if hasattr(self, 'peer_discovery_callback') and self.peer_discovery_callback:
+                logger.info("🔍 FORCE DISCOVERY: Triggering immediate peer discovery")
+                await self.peer_discovery_callback()
+            else:
+                logger.debug("No peer discovery callback set")
+        except Exception as e:
+            logger.error(f"❌ Error triggering peer discovery: {e}")
+    
+    def set_peer_discovery_callback(self, callback):
+        """Set callback for triggering peer discovery."""
+        self.peer_discovery_callback = callback
     
     async def shutdown(self):
         """Shutdown the piece manager."""

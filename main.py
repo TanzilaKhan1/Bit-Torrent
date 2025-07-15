@@ -3,9 +3,7 @@
 #Bit-Torrent/main.py
 
 """
-FINAL FIXED: BitTorrent Client with Working Piece Transfer
-=========================================================
-
+BitTorrent Client with Working Piece Transfer
 All components now properly fixed for actual file transfer.
 """
 
@@ -47,8 +45,8 @@ async def run_tracker(port: int = 8080):
     
     try:
         await tracker.start()
-        print(f"🎯 FINAL FIXED: Tracker started on http://localhost:{port}")
-        print(f"📊 Stats: http://localhost:{port}/stats")
+        print(f"Tracker started on http://localhost:{port}")
+        print(f"Stats: http://localhost:{port}/stats")
         print("Press Ctrl+C to stop")
         
         while tracker.running:
@@ -77,14 +75,13 @@ async def run_peer(port: int, download_dir: str, torrent_path: Optional[str] = N
     try:
         await peer.start()
         
-        # Add torrent if provided
         if torrent_path:
             await peer.add_torrent(torrent_path)
         
-        print(f"🚀 FINAL FIXED: Peer started on port {port}")
-        print(f"📁 Download directory: {download_dir}")
+        print(f"Peer started on port {port}")
+        print(f"Download directory: {download_dir}")
         if torrent_path:
-            print(f"📋 Torrent: {torrent_path}")
+            print(f" Torrent: {torrent_path}")
         print("Press Ctrl+C to stop")
         
         await peer.wait_for_shutdown()

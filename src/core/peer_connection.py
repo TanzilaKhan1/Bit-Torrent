@@ -69,6 +69,7 @@ class BitfieldFixedPeerConnection:
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.remote_peer_id = None
+        self.peer_extensions = {}
         
         # Connection state
         self.reader = None
@@ -103,6 +104,16 @@ class BitfieldFixedPeerConnection:
         self.bytes_downloaded = 0
         self.bytes_uploaded = 0
         self.last_activity = time.time()
+        self.last_received_data = time.time()
+        
+        # Choking algorithm state
+        self.upload_rate = 0.0
+        self.download_rate = 0.0
+        self.last_rate_update = time.time()
+        self.upload_history = []
+        self.download_history = []
+        self.choking_decision_time = 0.0
+        self.unchoke_slots = 4  # Standard number of unchoke slots
         
         # Configuration
         self.block_size = 16384  # 16KB blocks
@@ -171,13 +182,20 @@ class BitfieldFixedPeerConnection:
             return False
     
     async def _perform_handshake(self) -> bool:
-        """Perform BitTorrent handshake."""
+        """Perform BitTorrent handshake with extension support."""
         try:
-            # Send handshake
-            handshake = create_handshake_message(self.info_hash, self.peer_id)
+            # Send handshake with our supported extensions
+            our_extensions = {
+                'dht': True,
+                'fast': True,
+                'extension_protocol': True,
+                'utp': False,  # Not implemented yet
+                'encryption': False  # Not implemented yet
+            }
+            handshake = create_handshake_message(self.info_hash, self.peer_id, our_extensions)
             self.writer.write(handshake)
             await self.writer.drain()
-            logger.debug(f"📤 Sent handshake to {self.host}:{self.port}")
+            logger.debug(f"📤 Sent handshake to {self.host}:{self.port} with extensions: {our_extensions}")
             
             # Receive handshake response
             try:
@@ -196,7 +214,7 @@ class BitfieldFixedPeerConnection:
                 logger.error(f"❌ Failed to parse handshake from {self.host}:{self.port}")
                 return False
             
-            peer_info_hash, peer_id = result
+            peer_info_hash, peer_id, peer_extensions = result
             
             # Verify info hash
             if peer_info_hash != self.info_hash:
@@ -204,7 +222,18 @@ class BitfieldFixedPeerConnection:
                 return False
             
             self.remote_peer_id = peer_id
+            self.peer_extensions = peer_extensions
+            
+            # Log supported extensions
+            supported_extensions = [ext for ext, supported in peer_extensions.items() if supported]
             logger.info(f"✅ Handshake successful with {self.host}:{self.port}, peer_id: {peer_id.hex()[:8]}")
+            logger.info(f"   Peer extensions: {supported_extensions}")
+            
+            # Check for incompatible requirements
+            if peer_extensions.get('encryption', False) and not our_extensions.get('encryption', False):
+                logger.warning(f"⚠️  Peer {self.host}:{self.port} requires encryption but we don't support it")
+                # Continue anyway - many clients don't enforce this
+            
             return True
             
         except Exception as e:
@@ -274,9 +303,9 @@ class BitfieldFixedPeerConnection:
                 await self.send_interested()
                 logger.info(f"🎯 Sent INTERESTED to {self.host}:{self.port} for {len(self.need_pieces)} pieces")
             
-            # Always unchoke initially (for incoming connections, we want to be generous)
-            await self.send_unchoke()
-            logger.info(f"🔓 Sent initial UNCHOKE to {self.host}:{self.port}")
+            # Don't automatically unchoke - let the choking algorithm decide
+            # This prevents abuse and implements proper BitTorrent choking behavior
+            logger.info(f"📊 Initial protocol complete for {self.host}:{self.port}, choking algorithm will manage unchoking")
             
             logger.info(f"✅ BITFIELD FIX: Initial protocol complete for {self.host}:{self.port}")
             
@@ -371,6 +400,8 @@ class BitfieldFixedPeerConnection:
             # Read message length
             try:
                 length_data = await asyncio.wait_for(self.reader.readexactly(4), timeout=30.0)
+                # Reset timer when ANY data is received
+                self.last_received_data = time.time()
             except asyncio.TimeoutError:
                 logger.debug(f"⏰ Message read timeout from {self.host}:{self.port}")
                 return None
@@ -397,6 +428,8 @@ class BitfieldFixedPeerConnection:
             # Read message data
             try:
                 message_data = await asyncio.wait_for(self.reader.readexactly(message_length), timeout=30.0)
+                # Reset timer when message data is received
+                self.last_received_data = time.time()
             except (asyncio.IncompleteReadError, ConnectionResetError, OSError) as e:
                 if not self.connection_closed_logged:
                     logger.info(f"Incomplete message or connection closed by {self.host}:{self.port}: {e}")
@@ -491,9 +524,9 @@ class BitfieldFixedPeerConnection:
         self.peer_interested = True
         logger.info(f"🎯 Peer {self.host}:{self.port} is interested in our pieces")
         
-        # Auto-unchoke interested peers
-        await self.send_unchoke()
-        logger.info(f"🔓 Auto-unchoked {self.host}:{self.port}")
+        # Don't auto-unchoke - let the choking algorithm decide
+        # This will be handled by the choking manager
+        logger.info(f"📊 Peer {self.host}:{self.port} is interested, choking algorithm will decide")
     
     async def _handle_not_interested(self, payload: bytes):
         """Handle not interested message."""
@@ -711,11 +744,12 @@ class BitfieldFixedPeerConnection:
             await self.disconnect()
     
     async def _keep_alive_loop(self):
-        """Keep-alive loop."""
+        """Keep-alive loop - fixed to use last_received_data timer."""
         try:
             while self.connected:
                 await asyncio.sleep(self.keep_alive_interval)
-                if time.time() - self.last_activity > self.keep_alive_interval:
+                # Check if we need to send keep-alive based on when we last received data
+                if time.time() - self.last_received_data > self.keep_alive_interval:
                     await self._send_keep_alive()
         except asyncio.CancelledError:
             pass
@@ -734,6 +768,56 @@ class BitfieldFixedPeerConnection:
     def can_upload_to(self) -> bool:
         """Check if we can upload to this peer."""
         return self.connected and not self.am_choking and self.peer_interested
+    
+    def update_rates(self):
+        """Update upload and download rates."""
+        current_time = time.time()
+        time_diff = current_time - self.last_rate_update
+        
+        if time_diff > 0:
+            # Calculate rates (bytes per second)
+            upload_rate = self.bytes_uploaded / time_diff if time_diff > 0 else 0
+            download_rate = self.bytes_downloaded / time_diff if time_diff > 0 else 0
+            
+            # Update rate history (keep last 10 samples)
+            self.upload_history.append(upload_rate)
+            self.download_history.append(download_rate)
+            
+            if len(self.upload_history) > 10:
+                self.upload_history.pop(0)
+            if len(self.download_history) > 10:
+                self.download_history.pop(0)
+            
+            # Calculate average rates
+            self.upload_rate = sum(self.upload_history) / len(self.upload_history)
+            self.download_rate = sum(self.download_history) / len(self.download_history)
+            
+            self.last_rate_update = current_time
+    
+    def should_unchoke(self) -> bool:
+        """Determine if this peer should be unchoked based on simple algorithm."""
+        if not self.peer_interested:
+            return False
+        
+        # Update rates first
+        self.update_rates()
+        
+        # Simple choking algorithm: prioritize peers with good download rates
+        # and peers that are actively uploading to us
+        return (self.download_rate > 1000 or  # Good download rate (>1KB/s)
+                self.upload_rate > 0 or        # They're uploading to us
+                time.time() - self.choking_decision_time > 30)  # Give everyone a chance every 30s
+    
+    async def apply_choking_decision(self, should_unchoke: bool):
+        """Apply choking decision based on algorithm."""
+        if should_unchoke and self.am_choking and self.peer_interested:
+            await self.send_unchoke()
+            self.choking_decision_time = time.time()
+            logger.info(f"🔓 Unchoked {self.host}:{self.port} (rate: {self.download_rate:.1f} B/s)")
+        elif not should_unchoke and not self.am_choking:
+            await self.send_choke()
+            self.choking_decision_time = time.time()
+            logger.info(f"🔒 Choked {self.host}:{self.port} (rate: {self.download_rate:.1f} B/s)")
     
     def set_available_pieces(self, pieces: set):
         """BITFIELD FIX: Set available pieces with validation."""

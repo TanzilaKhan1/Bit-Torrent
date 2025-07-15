@@ -132,7 +132,7 @@ class BitfieldFixedPeerServer:
                 logger.warning(f"❌ Invalid handshake format from {peer_addr}")
                 return
             
-            peer_info_hash, peer_id = result
+            peer_info_hash, peer_id, peer_extensions = result
             logger.info(f"✅ Handshake parsed from {peer_addr}: info_hash={peer_info_hash.hex()[:16]}, peer_id={peer_id.hex()[:8]}")
             
             # Step 3: Validate torrent
@@ -148,10 +148,18 @@ class BitfieldFixedPeerServer:
             logger.debug(f"📤 Sending handshake response to {peer_addr}")
             
             try:
-                handshake_response = create_handshake_message(peer_info_hash, session_info['peer_id'])
+                # Send handshake with our supported extensions
+                our_extensions = {
+                    'dht': True,
+                    'fast': True,
+                    'extension_protocol': True,
+                    'utp': False,  # Not implemented yet
+                    'encryption': False  # Not implemented yet
+                }
+                handshake_response = create_handshake_message(peer_info_hash, session_info['peer_id'], our_extensions)
                 writer.write(handshake_response)
                 await writer.drain()
-                logger.debug(f"✅ Handshake response sent to {peer_addr}")
+                logger.debug(f"✅ Handshake response sent to {peer_addr} with extensions: {our_extensions}")
             except Exception as e:
                 logger.error(f"❌ Failed to send handshake response to {peer_addr}: {e}")
                 return

@@ -3,9 +3,7 @@
 #Bit-Torrent/src/core/peer_discovery.py
 
 """
-Peer Discovery Coordinator - Real BitTorrent Peer Discovery Hierarchy
-=====================================================================
-
+Peer Discovery Coordinator 
 Implements proper BitTorrent peer discovery hierarchy:
 1. DHT (Distributed Hash Table) - Primary
 2. PEX (Peer Exchange) - Connected peers
