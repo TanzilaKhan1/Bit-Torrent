@@ -696,7 +696,8 @@ class BitfieldFixedPeerConnection:
     async def send_request(self, piece_index: int, block_offset: int, block_length: int):
         """Send request message."""
         if len(self.pending_requests) >= self.max_pending_requests:
-            logger.debug(f"⚠️  Request limit reached for {self.host}:{self.port}")
+            logger.warning(f"⚠️  REQUEST LIMIT: {self.host}:{self.port} has {len(self.pending_requests)}/{self.max_pending_requests} pending requests")
+            logger.warning(f"   📋 Pending requests: {list(self.pending_requests.keys())}")
             return False
         
         payload = struct.pack('>III', piece_index, block_offset, block_length)
@@ -706,8 +707,10 @@ class BitfieldFixedPeerConnection:
             self.pending_requests[request_key] = time.time()
             
             logger.info(f"📤 Requested piece {piece_index} block {block_offset} ({block_length} bytes) from {self.host}:{self.port}")
+            logger.debug(f"   📊 Pending requests: {len(self.pending_requests)}/{self.max_pending_requests}")
             return True
         else:
+            logger.error(f"❌ Failed to send request message to {self.host}:{self.port}")
             return False
     async def send_piece(self, piece_index: int, block_offset: int, block_data: bytes):
         """Send piece message."""

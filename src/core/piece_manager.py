@@ -104,7 +104,8 @@ class SimplifiedPieceManager:
         self.peers: Dict[str, PeerInfo] = {}
         
         # Configuration
-        self.max_concurrent_pieces = 3
+        self.max_concurrent_pieces = 1  # OVERLOAD FIX: Reduce to 1 to prevent overwhelming connections
+        self.max_requests_per_peer = 5   # OVERLOAD FIX: Limit concurrent requests per peer
         
         # Initialize from storage
         self._initialize_from_storage()
@@ -112,6 +113,12 @@ class SimplifiedPieceManager:
         # Download management
         self.download_manager_running = False
         self.download_manager_task = None
+        
+        # RACE CONDITION FIX: Add event to wake up download manager
+        self.new_opportunity_event = asyncio.Event()
+        
+        # PROGRESS UPDATE FIX: Add callback for immediate progress updates
+        self.on_progress_update = None
         
         logger.info(f"Simplified piece manager initialized: {len(self.completed_pieces)}/{self.total_pieces} pieces")
     
@@ -153,10 +160,13 @@ class SimplifiedPieceManager:
         
         logger.info(f"✅ Set up callbacks for peer {peer_id}")
         
-        # Start download management if needed
+        # RACE CONDITION FIX: Always try to start download manager OR wake up existing one
         if not self.download_manager_running and len(self.pending_pieces) > 0:
             logger.info(f"🚀 Starting download management for {len(self.pending_pieces)} pending pieces")
             self.download_manager_task = asyncio.create_task(self.manage_downloads())
+        elif self.download_manager_running:
+            logger.info(f"🔔 RACE CONDITION FIX: Waking up existing download manager (new peer added)")
+            self.new_opportunity_event.set()
     
     def remove_peer(self, peer_id: str):
         """Remove a peer from the manager."""
@@ -177,16 +187,26 @@ class SimplifiedPieceManager:
         block_offset = piece_block.block_offset
         block_data = piece_block.block_data
         
+        logger.info(f"📥 PIECE_MANAGER: Received block for piece {piece_index}, offset {block_offset}, size {len(block_data)}")
+        
         if piece_index not in self.active_downloads:
-            logger.warning(f"Received block for piece {piece_index} not being downloaded")
+            logger.warning(f"❌ PIECE_MANAGER: Received block for piece {piece_index} not being downloaded")
+            logger.warning(f"   Active downloads: {list(self.active_downloads.keys())}")
             return
         
         download = self.active_downloads[piece_index]
+        logger.info(f"📦 PIECE_MANAGER: Adding block {block_offset} to piece {piece_index}")
+        logger.info(f"   📊 Before: {len(download.blocks)} blocks received, {len(download.requested_blocks)} blocks requested")
+        
         download.add_block(block_offset, block_data)
+        
+        logger.info(f"   📊 After: {len(download.blocks)} blocks received, {len(download.requested_blocks)} blocks requested")
+        logger.info(f"   ✅ PIECE_MANAGER: Block {block_offset} added to piece {piece_index}")
         
         # Check if piece is complete
         if download.completed:
-            logger.info(f"Piece {piece_index} download completed")
+            logger.info(f"🎉 PIECE_MANAGER: Piece {piece_index} download completed!")
+            logger.info(f"   📊 Total blocks: {len(download.blocks)}")
             asyncio.create_task(self._complete_piece(piece_index))
     
     def _on_have_received(self, piece_index: int):
@@ -195,34 +215,44 @@ class SimplifiedPieceManager:
     
     def _on_bitfield_received(self, peer_id: str, pieces: Set[int]):
         """Handle bitfield from peer."""
-        logger.info(f"Received bitfield from {peer_id}: {len(pieces)} pieces")
+        logger.info(f"🎯 PIECE_MANAGER: Received bitfield from {peer_id}: {len(pieces)} pieces")
+        logger.info(f"   📦 Pieces: {sorted(list(pieces))}")
         
         if peer_id in self.peers:
             peer_info = self.peers[peer_id]
+            logger.info(f"   🔧 PIECE_MANAGER: Updating peer {peer_id} available pieces")
+            logger.info(f"   📊 Before: {len(peer_info.available_pieces)} pieces - {sorted(list(peer_info.available_pieces))}")
+            
             peer_info.available_pieces = pieces.copy()
+            
+            logger.info(f"   📊 After: {len(peer_info.available_pieces)} pieces - {sorted(list(peer_info.available_pieces))}")
             
             # Check if peer has pieces we need
             needed_from_peer = pieces.intersection(self.pending_pieces)
             if needed_from_peer:
-                logger.info(f"Peer {peer_id} has {len(needed_from_peer)} pieces we need: {sorted(list(needed_from_peer))}")
+                logger.info(f"🎯 PIECE_MANAGER: Peer {peer_id} has {len(needed_from_peer)} pieces we need: {sorted(list(needed_from_peer))}")
                 
                 # Log peer connection state for debugging
                 can_download = peer_info.connection.can_download_from()
-                logger.info(f"Can download from {peer_id}: {can_download}")
-                logger.info(f"  - Connected: {peer_info.connection.connected}")
-                logger.info(f"  - Peer choking: {peer_info.connection.peer_choking}")
-                logger.info(f"  - Am interested: {peer_info.connection.am_interested}")
+                logger.info(f"   🔍 Can download from {peer_id}: {can_download}")
+                logger.info(f"   🔗 Connected: {peer_info.connection.connected}")
+                logger.info(f"   🔒 Peer choking: {peer_info.connection.peer_choking}")
+                logger.info(f"   🎯 Am interested: {peer_info.connection.am_interested}")
                 
-                # Start download manager if not running
+                # RACE CONDITION FIX: Always try to start download manager OR wake up existing one
                 if not self.download_manager_running and len(self.pending_pieces) > 0:
-                    logger.info(f"🚀 Starting download manager for {len(self.pending_pieces)} pending pieces")
+                    logger.info(f"🚀 PIECE_MANAGER: Starting download manager for {len(self.pending_pieces)} pending pieces")
                     self.download_manager_task = asyncio.create_task(self.manage_downloads())
+                elif self.download_manager_running:
+                    logger.info(f"🔔 PIECE_MANAGER: Waking up existing download manager (peer has needed pieces)")
+                    self.new_opportunity_event.set()
                 else:
                     logger.debug(f"Download manager already running: {self.download_manager_running}")
             else:
-                logger.info(f"Peer {peer_id} has no pieces we need")
+                logger.info(f"📭 PIECE_MANAGER: Peer {peer_id} has no pieces we need")
         else:
-            logger.warning(f"Received bitfield from unknown peer {peer_id}")
+            logger.warning(f"❌ PIECE_MANAGER: Received bitfield from unknown peer {peer_id}")
+            logger.warning(f"   Available peers: {list(self.peers.keys())}")
     
     async def _on_piece_request(self, piece_index: int, block_offset: int, block_length: int) -> Optional[bytes]:
         """Handle piece request from peer."""
@@ -250,9 +280,13 @@ class SimplifiedPieceManager:
         if peer_id in self.peers:
             self.peers[peer_id].is_connected = True
             
-            # Start download manager if not running
+            # RACE CONDITION FIX: Always try to start download manager OR wake up existing one
             if not self.download_manager_running and len(self.pending_pieces) > 0:
+                logger.info(f"🚀 Starting download manager after unchoke from {peer_id}")
                 self.download_manager_task = asyncio.create_task(self.manage_downloads())
+            elif self.download_manager_running:
+                logger.info(f"🔔 RACE CONDITION FIX: Waking up existing download manager (peer {peer_id} unchoked us)")
+                self.new_opportunity_event.set()
     
     async def _complete_piece(self, piece_index: int):
         """Complete a piece download."""
@@ -283,6 +317,10 @@ class SimplifiedPieceManager:
                         
                         logger.info(f"Completed piece {piece_index}")
                         
+                        # PROGRESS UPDATE FIX: Trigger immediate progress update
+                        if self.on_progress_update:
+                            self.on_progress_update()
+                        
                         # Check if download is complete
                         if self.is_complete():
                             logger.info("Download complete!")
@@ -299,6 +337,11 @@ class SimplifiedPieceManager:
         
         # Clean up
         del self.active_downloads[piece_index]
+        
+        # RACE CONDITION FIX: Wake up download manager when piece completes (frees up download slot)
+        if self.download_manager_running and len(self.pending_pieces) > 0:
+            logger.info(f"🔔 RACE CONDITION FIX: Waking up download manager (piece {piece_index} completed, slot available)")
+            self.new_opportunity_event.set()
     
     def get_next_piece_to_download(self) -> Optional[Tuple[int, str]]:
         """Get next piece to download using simple rarest first."""
@@ -310,48 +353,52 @@ class SimplifiedPieceManager:
             logger.info(f"❌ GET_NEXT_PIECE: No pending pieces")
             return None
         
-        # Count availability for each piece
+        # OPTIMIZATION: Filter out pieces already being downloaded
+        available_pieces = self.pending_pieces - set(self.active_downloads.keys())
+        if not available_pieces:
+            logger.info(f"❌ GET_NEXT_PIECE: All pending pieces are already being downloaded")
+            logger.info(f"   📊 Active downloads: {sorted(list(self.active_downloads.keys()))}")
+            return None
+        
+        logger.info(f"   📦 Available for download: {len(available_pieces)} - {sorted(list(available_pieces))}")
+        
+        # Count availability for each available piece
         piece_availability = defaultdict(list)
         
         logger.info(f"🔍 GET_NEXT_PIECE: Checking peer availability...")
         for peer_id, peer_info in self.peers.items():
             logger.info(f"   👤 Checking peer {peer_id}:")
-            logger.info(f"      - Total available pieces: {len(peer_info.available_pieces)}")
-            logger.info(f"      - Available pieces: {sorted(list(peer_info.available_pieces))}")
+            logger.info(f"       - Total available pieces: {len(peer_info.available_pieces)}")
+            logger.info(f"       - Available pieces: {sorted(list(peer_info.available_pieces))}")
             
-            # FIXED: Use proper BitTorrent protocol state check instead of just is_connected
-            for piece_index in self.pending_pieces:
+            # FIXED: Only check pieces that are not already being downloaded
+            for piece_index in available_pieces:
                 can_download = peer_info.can_download_piece(piece_index)
-                logger.info(f"      - Piece {piece_index}: can_download={can_download}")
-                
+                logger.info(f"       - Piece {piece_index}: can_download={can_download}")
                 if can_download:
+                    logger.info(f"       - ✅ Added peer {peer_id} for piece {piece_index}")
                     piece_availability[piece_index].append(peer_id)
-                    logger.info(f"      - ✅ Added peer {peer_id} for piece {piece_index}")
                 else:
-                    # Debug why we can't download
-                    is_connected = peer_info.is_connected
-                    has_piece = piece_index in peer_info.available_pieces
-                    can_download_from = peer_info.connection.can_download_from()
-                    logger.info(f"      - ❌ Cannot download piece {piece_index}: connected={is_connected}, has_piece={has_piece}, can_download_from={can_download_from}")
+                    connection = peer_info.connection
+                    logger.info(f"       - ❌ Cannot download piece {piece_index}: connected={connection.connected}, has_piece={piece_index in peer_info.available_pieces}, can_download_from={connection.can_download_from()}")
         
         logger.info(f"📊 GET_NEXT_PIECE: Piece availability summary:")
-        for piece_index, peers in piece_availability.items():
-            logger.info(f"   📦 Piece {piece_index}: available from {len(peers)} peers - {peers}")
+        for piece_index, peer_ids in piece_availability.items():
+            logger.info(f"   📦 Piece {piece_index}: available from {len(peer_ids)} peers - {peer_ids}")
         
         if not piece_availability:
             logger.warning(f"❌ GET_NEXT_PIECE: No pieces available for download from any connected peers")
             return None
         
-        # Select rarest piece
-        rarest_piece = min(piece_availability.keys(), key=lambda p: len(piece_availability[p]))
+        # Find piece with fewest sources (rarest first)
+        rarest_piece = min(piece_availability.keys(), key=lambda x: len(piece_availability[x]))
         available_peers = piece_availability[rarest_piece]
+        selected_peer = available_peers[0]  # Take first available peer
         
-        # Select first available peer
-        peer_id = available_peers[0]
-        
-        logger.info(f"✅ GET_NEXT_PIECE: Selected piece {rarest_piece} from peer {peer_id}")
+        logger.info(f"✅ GET_NEXT_PIECE: Selected piece {rarest_piece} from peer {selected_peer}")
         logger.info(f"   📊 Piece {rarest_piece} is available from {len(available_peers)} peers")
-        return rarest_piece, peer_id
+        
+        return rarest_piece, selected_peer
     
     async def start_piece_download(self, piece_index: int, peer_id: str) -> bool:
         """Start downloading a piece from a specific peer."""
@@ -404,56 +451,68 @@ class SimplifiedPieceManager:
         
         peer_info = self.peers[peer_id]
         
-        # FIXED: Use proper BitTorrent protocol state check
-        can_download = peer_info.can_download_piece(piece_index)
-        logger.info(f"   🔍 Can download piece: {can_download}")
-        
-        if not can_download:
-            logger.warning(f"❌ BLOCK_REQUEST: Cannot request blocks for piece {piece_index} from {peer_id}")
-            logger.warning(f"      - Connected: {peer_info.connection.connected}")
-            logger.warning(f"      - Peer choking: {peer_info.connection.peer_choking}")
-            logger.warning(f"      - Am interested: {peer_info.connection.am_interested}")
-            logger.warning(f"      - Is connected flag: {peer_info.is_connected}")
-            logger.warning(f"      - Has piece: {piece_index in peer_info.available_pieces}")
+        if not peer_info.can_download_piece(piece_index):
+            logger.debug(f"Cannot request blocks for piece {piece_index} from {peer_id}")
+            logger.debug(f"  - Connected: {peer_info.connection.connected}")
+            logger.debug(f"  - Peer choking: {peer_info.connection.peer_choking}")
+            logger.debug(f"  - Am interested: {peer_info.connection.am_interested}")
             return
         
-        # Get unrequested blocks
+        # OVERLOAD FIX: Check if peer has capacity for more requests
+        pending_requests = len(peer_info.connection.pending_requests)
+        max_requests = peer_info.connection.max_pending_requests
+        
+        logger.info(f"   📊 Peer capacity: {pending_requests}/{max_requests} pending requests")
+        
+        if pending_requests >= max_requests:
+            logger.warning(f"⚠️  Peer {peer_id} at request capacity ({pending_requests}/{max_requests}), skipping piece {piece_index}")
+            return
+        
+        # Get unrequested blocks (limit to prevent overload)
         unrequested_blocks = download.get_unrequested_blocks()
+        max_blocks_per_request = min(self.max_requests_per_peer, len(unrequested_blocks))
+        blocks_to_request = unrequested_blocks[:max_blocks_per_request]
         
         logger.info(f"   📦 Unrequested blocks: {len(unrequested_blocks)}")
-        logger.info(f"   📦 Block offsets: {unrequested_blocks[:10]}")  # Show first 10
-        
-        if not unrequested_blocks:
-            logger.info(f"✅ BLOCK_REQUEST: No unrequested blocks for piece {piece_index}")
-            return
-        
-        # Request up to 5 blocks at once
-        blocks_to_request = unrequested_blocks[:5]
+        logger.info(f"   📦 Block offsets: {blocks_to_request[:10]}")  # Show first 10 for brevity
         logger.info(f"   📤 Requesting {len(blocks_to_request)} blocks...")
         
+        # OVERLOAD FIX: Add throttling and better error handling
+        successful_requests = 0
+        failed_requests = 0
+        
         for block_offset in blocks_to_request:
-            remaining_bytes = download.piece_length - block_offset
-            block_length = min(self.block_size, remaining_bytes)
-            
-            logger.info(f"   📤 Requesting block: piece={piece_index}, offset={block_offset}, length={block_length}")
-            
             try:
+                block_length = min(self.block_size, download.piece_length - block_offset)
+                logger.info(f"   📤 Requesting block: piece={piece_index}, offset={block_offset}, length={block_length}")
+                
                 success = await peer_info.connection.send_request(piece_index, block_offset, block_length)
                 if success:
                     download.requested_blocks.add(block_offset)
+                    successful_requests += 1
                     logger.info(f"   ✅ Successfully requested piece {piece_index} block {block_offset} from {peer_id}")
+                    
+                    # OVERLOAD FIX: Small delay between requests to prevent flooding
+                    await asyncio.sleep(0.01)  # 10ms delay
                 else:
+                    failed_requests += 1
                     logger.error(f"   ❌ Failed to send request for piece {piece_index} block {block_offset} to {peer_id}")
-                    break
+                    break  # Stop on first failure to avoid flooding
+                    
             except Exception as e:
-                logger.error(f"   💥 Exception requesting block: {e}")
-                import traceback
-                logger.error(f"   Traceback: {traceback.format_exc()}")
-                break
+                failed_requests += 1
+                logger.error(f"   ❌ Exception sending request for piece {piece_index} block {block_offset} to {peer_id}: {e}")
+                break  # Stop on any exception
         
         logger.info(f"📤 BLOCK_REQUEST: Completed block requests for piece {piece_index}")
+        logger.info(f"   📊 Successful requests: {successful_requests}")
+        logger.info(f"   📊 Failed requests: {failed_requests}")
         logger.info(f"   📊 Total requested blocks: {len(download.requested_blocks)}")
         logger.info(f"   📊 Total received blocks: {len(download.blocks)}")
+        
+        # OVERLOAD FIX: If too many failures, mark peer as problematic
+        if failed_requests > successful_requests and failed_requests > 2:
+            logger.warning(f"⚠️  Peer {peer_id} has high failure rate ({failed_requests} failures), may need throttling")
     
     async def manage_downloads(self):
         """Manage piece downloads."""
@@ -487,7 +546,21 @@ class SimplifiedPieceManager:
                 
                 # Start new downloads
                 started_new_downloads = False
-                while len(self.active_downloads) < self.max_concurrent_pieces and len(self.pending_pieces) > 0:
+                
+                # OVERLOAD FIX: Only start new downloads if current ones are making progress
+                # This prevents overwhelming peer connections with too many concurrent requests
+                can_start_new_downloads = True
+                
+                if len(self.active_downloads) > 0:
+                    # Check if active downloads have received any blocks
+                    for piece_index, download in self.active_downloads.items():
+                        if len(download.blocks) == 0 and len(download.requested_blocks) >= 3:
+                            # Download has requested blocks but received none - peer might be overwhelmed
+                            logger.info(f"   ⏳ Waiting for piece {piece_index} to receive blocks before starting new downloads")
+                            can_start_new_downloads = False
+                            break
+                
+                while len(self.active_downloads) < self.max_concurrent_pieces and len(self.pending_pieces) > 0 and can_start_new_downloads:
                     logger.info(f"🔍 DOWNLOAD MANAGER: Looking for next piece to download...")
                     result = self.get_next_piece_to_download()
                     
@@ -534,9 +607,23 @@ class SimplifiedPieceManager:
                 # Clean up timed out downloads
                 await self._cleanup_timed_out_downloads()
                 
-                # Wait before next iteration
-                logger.info(f"⏱️  DOWNLOAD MANAGER: Sleeping for 2 seconds...")
-                await asyncio.sleep(2.0)
+                # RACE CONDITION FIX: Smart waiting - if no downloads started, wait for new opportunities
+                if not started_new_downloads and len(self.active_downloads) == 0:
+                    logger.info(f"⏳ RACE CONDITION FIX: No downloads active, waiting for new opportunities...")
+                    
+                    # Clear any previous event
+                    self.new_opportunity_event.clear()
+                    
+                    # Wait for either new opportunities or timeout
+                    try:
+                        await asyncio.wait_for(self.new_opportunity_event.wait(), timeout=10.0)
+                        logger.info(f"🔔 RACE CONDITION FIX: New opportunity detected, checking again...")
+                    except asyncio.TimeoutError:
+                        logger.info(f"⏰ RACE CONDITION FIX: Timeout waiting for opportunities, continuing...")
+                else:
+                    # Normal operation - short sleep before next iteration
+                    logger.info(f"⏱️  DOWNLOAD MANAGER: Sleeping for 2 seconds...")
+                    await asyncio.sleep(2.0)
                 
         except asyncio.CancelledError:
             logger.info("📛 DOWNLOAD MANAGER: Download management cancelled")
@@ -552,11 +639,18 @@ class SimplifiedPieceManager:
         """Clean up downloads that have timed out."""
         now = time.time()
         
+        cleaned_up_count = 0
         for piece_index, download in list(self.active_downloads.items()):
             if now - download.start_time > 300:  # 5 minutes timeout
                 logger.warning(f"Piece {piece_index} download timed out")
                 del self.active_downloads[piece_index]
                 self.pending_pieces.add(piece_index)
+                cleaned_up_count += 1
+        
+        # RACE CONDITION FIX: Wake up download manager if we cleaned up timed-out downloads (frees up slots)
+        if cleaned_up_count > 0 and self.download_manager_running and len(self.pending_pieces) > 0:
+            logger.info(f"🔔 RACE CONDITION FIX: Waking up download manager ({cleaned_up_count} timed-out downloads cleaned up)")
+            self.new_opportunity_event.set()
     
     def get_progress(self) -> Tuple[int, int, float]:
         """Get download progress."""

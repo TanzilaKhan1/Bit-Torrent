@@ -198,14 +198,45 @@ class BitfieldFixedPeerServer:
                 peer_id_str = f"{peer_addr[0]}:{peer_addr[1]}"
                 piece_manager.add_peer(peer_id_str, peer_connection)
                 logger.info(f"✅ Added peer {peer_id_str} to piece manager")
+                
+                # PEER COUNT FIX: Also add to session peer_connections for proper statistics
+                if 'session' in session_info:
+                    session = session_info['session']
+                    session.peer_connections[peer_id_str] = peer_connection
+                    logger.info(f"✅ Added peer {peer_id_str} to session peer connections")
+                else:
+                    logger.warning(f"⚠️  No session reference in session_info for peer tracking")
             else:
                 logger.error(f"❌ No piece manager found for session")
                 return
             
-            # Set up other callbacks with statistics tracking
-            peer_connection.on_piece_received = self._on_piece_received
+            # CALLBACK FIX: Set up statistics callbacks WITHOUT overwriting piece manager callbacks
+            # Store the piece manager's callbacks
+            piece_manager_bitfield_callback = peer_connection.on_bitfield_received
+            piece_manager_piece_callback = peer_connection.on_piece_received
+            
+            # Set up have callback with statistics tracking  
             peer_connection.on_have_received = self._on_have_received
-            peer_connection.on_bitfield_received = self._on_bitfield_received
+            
+            # CALLBACK FIX: Chain the piece_received callbacks instead of overwriting
+            def chained_piece_callback(piece_block):
+                # First call piece manager callback (most important - adds blocks to downloads)
+                if piece_manager_piece_callback:
+                    piece_manager_piece_callback(piece_block)
+                # Then call our statistics callback
+                self._on_piece_received(piece_block)
+            
+            peer_connection.on_piece_received = chained_piece_callback
+            
+            # CALLBACK FIX: Chain the bitfield callbacks instead of overwriting
+            def chained_bitfield_callback(pieces):
+                # First call piece manager callback (most important)
+                if piece_manager_bitfield_callback:
+                    piece_manager_bitfield_callback(pieces)
+                # Then call our statistics callback
+                self._on_bitfield_received(pieces)
+            
+            peer_connection.on_bitfield_received = chained_bitfield_callback
             
             # Step 6: Register connection
             incoming_connection = IncomingPeerConnection(
@@ -251,6 +282,16 @@ class BitfieldFixedPeerServer:
             if peer_id and peer_id in self.connections:
                 del self.connections[peer_id]
                 self.active_connections -= 1
+                
+                # PEER COUNT FIX: Also remove from session peer_connections
+                peer_id_str = f"{peer_addr[0]}:{peer_addr[1]}"
+                if peer_info_hash and peer_info_hash in self.active_torrents:
+                    session_info = self.active_torrents[peer_info_hash]
+                    if 'session' in session_info:
+                        session = session_info['session']
+                        if peer_id_str in session.peer_connections:
+                            del session.peer_connections[peer_id_str]
+                            logger.info(f"🧹 Removed peer {peer_id_str} from session peer connections")
                 
                 if self.on_connection_closed:
                     self.on_connection_closed(peer_id)
