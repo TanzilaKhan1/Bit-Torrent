@@ -196,13 +196,114 @@ class BitTorrentApplication:
                         if self.gui_window:
                             self.gui_window.log_message(f"Added torrent: {torrent_path}")
                     else:
-                        logger.error(f"Failed to add torrent: {torrent_path}")
-                        if self.gui_window:
-                            self.gui_window.log_message(f"Failed to add torrent: {torrent_path}")
+                        # Check if it's a duplicate by trying to load the torrent metadata
+                        try:
+                            from pathlib import Path
+                            from src.core.torrent_parser import load_torrent_file
+                            
+                            metadata = load_torrent_file(torrent_path)
+                            # Check if this info_hash already exists
+                            if metadata.info_hash in self.scheduler.sessions:
+                                logger.info(f"⚠️  Torrent already added: {Path(torrent_path).name}")
+                                print("torrent already added")
+                                if self.gui_window:
+                                    self.gui_window.log_message("torrent already added")
+                            else:
+                                logger.error(f"Failed to add torrent: {torrent_path}")
+                                if self.gui_window:
+                                    self.gui_window.log_message(f"Failed to add torrent: {torrent_path}")
+                        except Exception:
+                            logger.error(f"Failed to add torrent: {torrent_path}")
+                            if self.gui_window:
+                                self.gui_window.log_message(f"Failed to add torrent: {torrent_path}")
                 except Exception as e:
                     logger.error(f"Error adding torrent: {e}")
                     if self.gui_window:
                         self.gui_window.log_message(f"Error adding torrent: {e}")
+    
+    def add_seed_async(self, seed_path: str):
+        """Add seed file asynchronously."""
+        if not self.scheduler:
+            logger.error("Scheduler not available")
+            if self.gui_window:
+                self.gui_window.log_message("Error: Scheduler not available")
+            return
+        
+        try:
+            import os
+            from pathlib import Path
+            from src.core.torrent_creator import create_torrent_from_path
+            
+            # Check if file exists
+            if not os.path.exists(seed_path):
+                logger.error(f"File does not exist: {seed_path}")
+                if self.gui_window:
+                    self.gui_window.log_message(f"Error: File does not exist: {seed_path}")
+                return
+            
+            # Get file name and check if it's already a torrent
+            file_path = Path(seed_path)
+            file_name = file_path.name
+            
+            if file_name.endswith('.torrent'):
+                # It's already a torrent file, add it directly
+                logger.info(f"Adding existing torrent: {seed_path}")
+                if self.gui_window:
+                    self.gui_window.log_message(f"Adding existing torrent: {file_name}")
+                self.add_torrent_async(seed_path)
+                return
+            
+            # Create torrents directory if it doesn't exist
+            torrents_dir = Path("torrents")
+            torrents_dir.mkdir(exist_ok=True)
+            
+            # Create torrent file name: original_name.torrent
+            torrent_filename = f"{file_name}.torrent"
+            torrent_path = torrents_dir / torrent_filename
+            
+            # Create torrent file
+            logger.info(f"Creating torrent for: {file_name}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Creating torrent for: {file_name}")
+            
+            # Use local tracker
+            tracker_url = "http://localhost:8080/announce"
+            piece_length = 524288  # 512KB pieces as requested
+            
+            # Create the torrent
+            result = create_torrent_from_path(
+                input_path=str(file_path.absolute()),
+                output_path=str(torrent_path.absolute()),
+                tracker_url=tracker_url,
+                piece_length=piece_length
+            )
+            
+            logger.info(f"Created torrent: {torrent_filename}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Created torrent: {torrent_filename}")
+            
+            # Now add the created torrent to the scheduler
+            future = self.run_async_task(self.scheduler.add_torrent_file(str(torrent_path)))
+            if future:
+                try:
+                    success = future.result(timeout=10)
+                    if success:
+                        logger.info(f"Successfully added seed as torrent: {torrent_filename}")
+                        if self.gui_window:
+                            self.gui_window.log_message(f"Successfully added seed as torrent: {torrent_filename}")
+                    else:
+                        logger.error(f"Failed to add created torrent: {torrent_filename}")
+                        if self.gui_window:
+                            self.gui_window.log_message(f"Failed to add created torrent: {torrent_filename}")
+                except Exception as e:
+                    logger.error(f"Error adding created torrent: {e}")
+                    if self.gui_window:
+                        self.gui_window.log_message(f"Error adding created torrent: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error processing seed file: {e}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Error processing seed file: {e}")
     
     async def stop_async(self):
         """Stop async components."""

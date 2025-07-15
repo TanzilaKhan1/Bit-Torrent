@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QTabWidget, QTableWidget, QTableWidgetItem, QProgressBar, QLabel, 
     QTextEdit, QPlainTextEdit, QPushButton, QFileDialog, QMessageBox, QSplitter,
-    QHeaderView, QStatusBar, QMenuBar, QToolBar
+    QHeaderView, QStatusBar, QMenuBar, QToolBar, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QFont, QColor, QAction, QKeySequence
@@ -171,18 +171,14 @@ class BitTorrentMainWindow(QMainWindow):
         # Edit menu
         edit_menu = menubar.addMenu("Edit")
         
-        pause_action = QAction("Pause", self)
-        pause_action.triggered.connect(self.pause_torrent)
-        edit_menu.addAction(pause_action)
-        
-        resume_action = QAction("Resume", self)
-        resume_action.triggered.connect(self.resume_torrent)
-        edit_menu.addAction(resume_action)
-        
         remove_action = QAction("Remove", self)
         remove_action.setShortcut(QKeySequence.StandardKey.Delete)
         remove_action.triggered.connect(self.remove_torrent)
         edit_menu.addAction(remove_action)
+        
+        add_seed_action = QAction("Add Seed", self)
+        add_seed_action.triggered.connect(self.add_seed)
+        edit_menu.addAction(add_seed_action)
         
         # Help menu
         help_menu = menubar.addMenu("Help")
@@ -194,25 +190,30 @@ class BitTorrentMainWindow(QMainWindow):
     def setup_toolbar(self):
         """Setup the toolbar."""
         toolbar = self.addToolBar("Main")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        
+        # Add spacer to push buttons to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
         
         # Add torrent button
         add_button = QPushButton("Add Torrent")
         add_button.clicked.connect(self.add_torrent)
+        add_button.setObjectName("toolbarButton")
         toolbar.addWidget(add_button)
         
-        toolbar.addSeparator()
+        # Add seed button
+        add_seed_button = QPushButton("Add Seed")
+        add_seed_button.clicked.connect(self.add_seed)
+        add_seed_button.setObjectName("toolbarButton")
+        toolbar.addWidget(add_seed_button)
         
         # Control buttons
-        pause_button = QPushButton("Pause")
-        pause_button.clicked.connect(self.pause_torrent)
-        toolbar.addWidget(pause_button)
-        
-        resume_button = QPushButton("Resume")
-        resume_button.clicked.connect(self.resume_torrent)
-        toolbar.addWidget(resume_button)
-        
         remove_button = QPushButton("Remove")
         remove_button.clicked.connect(self.remove_torrent)
+        remove_button.setObjectName("toolbarButton")
         toolbar.addWidget(remove_button)
     
     def setup_status_bar(self):
@@ -231,6 +232,7 @@ class BitTorrentMainWindow(QMainWindow):
                 color: #ffffff;
                 gridline-color: #555555;
                 selection-background-color: #4a90e2;
+                alternate-background-color: #2d2d2d;
             }
             QTableWidget::item {
                 padding: 8px;
@@ -262,6 +264,28 @@ class BitTorrentMainWindow(QMainWindow):
             QPushButton:pressed {
                 background-color: #2a5a8a;
             }
+            
+            /* Toolbar-specific button styling */
+            QPushButton#toolbarButton {
+                background-color: transparent;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                margin: 4px 2px;
+                border-radius: 4px;
+                font-weight: 500;
+                font-size: 13px;
+                min-height: 16px;
+            }
+            QPushButton#toolbarButton:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: #ffffff;
+            }
+            QPushButton#toolbarButton:pressed {
+                background-color: rgba(255, 255, 255, 0.2);
+                color: #ffffff;
+            }
+            
             QMenuBar {
                 background-color: #555555;
                 color: #ffffff;
@@ -277,8 +301,11 @@ class BitTorrentMainWindow(QMainWindow):
                 background-color: #4a90e2;
             }
             QToolBar {
-                background-color: #555555;
-                border: 1px solid #666666;
+                background-color: #000000;
+                border: none;
+                padding: 8px 12px;
+                spacing: 4px;
+                min-height: 44px;
             }
             QStatusBar {
                 background-color: #555555;
@@ -296,51 +323,59 @@ class BitTorrentMainWindow(QMainWindow):
     
     def add_torrent(self):
         """Add a new torrent."""
+        import os
+        
+        # Set default directory to torrents folder if it exists, otherwise current directory
+        default_dir = "torrents" if os.path.exists("torrents") else ""
+        
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Torrent File", "", "Torrent Files (*.torrent)"
+            self, "Select Torrent File", default_dir, "Torrent Files (*.torrent)"
         )
         
         if file_path:
             self.log_message(f"Adding torrent: {file_path}")
             self.app.add_torrent_async(file_path)
     
-    def pause_torrent(self):
-        """Pause selected torrent."""
-        current_row = self.torrent_table.currentRow()
-        if current_row >= 0:
-            # Get torrent info hash from table
-            info_hash_item = self.torrent_table.item(current_row, 0)
-            if info_hash_item:
-                torrent_name = info_hash_item.text()
-                self.log_message(f"Pausing torrent: {torrent_name}")
-                # TODO: Implement pause functionality
-    
-    def resume_torrent(self):
-        """Resume selected torrent."""
-        current_row = self.torrent_table.currentRow()
-        if current_row >= 0:
-            # Get torrent info hash from table
-            info_hash_item = self.torrent_table.item(current_row, 0)
-            if info_hash_item:
-                torrent_name = info_hash_item.text()
-                self.log_message(f"Resuming torrent: {torrent_name}")
-                # TODO: Implement resume functionality
+    def add_seed(self):
+        """Add a new seed."""
+        import os
+        
+        # Set default directory to torrents folder if it exists, otherwise current directory
+        default_dir = "torrents" if os.path.exists("torrents") else ""
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Seed File", default_dir, "All Files (*)"
+        )
+        
+        if file_path:
+            self.log_message(f"Adding seed: {file_path}")
+            self.app.add_seed_async(file_path)
     
     def remove_torrent(self):
         """Remove selected torrent."""
-        current_row = self.torrent_table.currentRow()
-        if current_row >= 0:
-            reply = QMessageBox.question(
-                self, "Confirm Remove", 
-                "Are you sure you want to remove this torrent?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        selected_items = self.torrent_table.selectedItems()
+        if not selected_items:
+            # No torrent selected, show dialog
+            QMessageBox.information(
+                self, "No Selection", 
+                "Please select a torrent first",
+                QMessageBox.StandardButton.Ok
             )
-            if reply == QMessageBox.StandardButton.Yes:
-                info_hash_item = self.torrent_table.item(current_row, 0)
-                if info_hash_item:
-                    torrent_name = info_hash_item.text()
-                    self.log_message(f"Removing torrent: {torrent_name}")
-                    # TODO: Implement remove functionality
+            return
+            
+        # Get the row of the first selected item
+        current_row = selected_items[0].row()
+        reply = QMessageBox.question(
+            self, "Confirm Remove", 
+            "Are you sure you want to remove this torrent?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            info_hash_item = self.torrent_table.item(current_row, 0)
+            if info_hash_item:
+                torrent_name = info_hash_item.text()
+                self.log_message(f"Removing torrent: {torrent_name}")
+                # TODO: Implement remove functionality
     
     def show_about(self):
         """Show about dialog."""

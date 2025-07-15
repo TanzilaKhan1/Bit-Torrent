@@ -98,6 +98,18 @@ class FinalFixedBitTorrentPeer:
             logger.error(f"Torrent file not found: {torrent_path}")
             return False
         
+        # Check if torrent with same filename already exists
+        torrent_filename = torrent_file.name
+        existing_torrents = self.scheduler.get_all_stats()
+        
+        for existing_torrent in existing_torrents:
+            # Compare by filename (extract from torrent name)
+            existing_name = existing_torrent.get('name', '')
+            if existing_name == torrent_filename or existing_name.endswith(torrent_filename):
+                logger.info(f"⚠️  Torrent already added: {torrent_filename}")
+                print("torrent already added")
+                return False
+        
         logger.info(f"📋 FINAL FIXED: Adding torrent: {torrent_path}")
         success = await self.scheduler.add_torrent_file(torrent_path)
         

@@ -521,19 +521,6 @@ class BitfieldFixedPeerConnection:
             self.am_choking = False
         
         logger.info(f"📊 Peer {self.host}:{self.port} is interested and unchoked")
-        
-    def _on_peer_unchoked(self, peer_id: str):
-        """Handle when peer unchokes us."""
-        logger.info(f"🔓 Peer {peer_id} unchoked us - starting downloads")
-        
-        if peer_id in self.peers:
-            peer_info = self.peers[peer_id]
-            peer_info.is_connected = True
-            
-            # Start download manager if not running
-            if not self.download_manager_running and len(self.pending_pieces) > 0:
-                logger.info(f"🚀 Starting download management after unchoke")
-                self.download_manager_task = asyncio.create_task(self.manage_downloads())
     
     async def _handle_not_interested(self, payload: bytes):
         """Handle not interested message."""
