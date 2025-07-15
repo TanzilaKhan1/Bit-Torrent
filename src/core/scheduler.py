@@ -2,15 +2,7 @@
 
 #Bit-Torrent/src/core/scheduler.py
 
-"""
-BITFIELD FIX: Scheduler with Proper Callback Setup and Bitfield Handling
-========================================================================
 
-Key fixes:
-1. Set up all callbacks BEFORE starting message loop
-2. Ensure piece manager callbacks work correctly with bitfield
-3. Fix timing issues in peer connection management
-"""
 
 import asyncio
 import time
@@ -25,6 +17,8 @@ from .storage import TorrentStorage, PeerStorage
 from .piece_manager import PieceManager
 from .peer_connection import PeerConnection
 from .tracker_client import TrackerManager, TrackerEvent
+from .dht import DHT
+from .peer_discovery import PeerDiscoveryCoordinator
 
 logger = get_logger(__name__)
 
@@ -112,7 +106,7 @@ class BitfieldFixedTorrentSession:
 
 
 class BitfieldFixedTorrentScheduler:
-    """BITFIELD FIX: Scheduler with proper bitfield handling."""
+    """BITFIELD FIX: Scheduler with proper bitfield handling and DHT integration."""
     
     def __init__(self, download_dir: str = "./downloads", listen_port: int = 6881):
         self.download_dir = download_dir
@@ -129,14 +123,25 @@ class BitfieldFixedTorrentScheduler:
         self.max_peers = 10
         self.tracker_url = "http://localhost:8080/announce"
         
+        # DHT for peer discovery
+        self.dht = DHT(port=listen_port + 1000)  # Use different port for DHT
+        
+        # Peer Discovery Coordinator (manages all discovery methods)
+        self.peer_discovery = PeerDiscoveryCoordinator(
+            peer_port=listen_port,
+            tracker_urls=[self.tracker_url] if self.tracker_url else []
+        )
+        
         # Background tasks
         self.tracker_task = None
         self.stats_task = None
+        self.dht_announce_task = None
         
         # State
         self.running = False
         
         logger.info(f"BITFIELD FIX: Initialized scheduler with peer ID: {self.peer_id.hex()}")
+        logger.info(f"DHT will run on port: {listen_port + 1000}")
     
     def set_peer_server(self, peer_server):
         """Set the peer server instance."""
@@ -148,6 +153,21 @@ class BitfieldFixedTorrentScheduler:
             return
         
         self.running = True
+        
+        # Start DHT (for backward compatibility)
+        try:
+            await self.dht.start()
+            logger.info("✅ DHT started successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to start DHT: {e}")
+        
+        # Start Peer Discovery Coordinator (manages all discovery methods)
+        try:
+            await self.peer_discovery.start()
+            logger.info("✅ Peer Discovery Coordinator started successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to start Peer Discovery Coordinator: {e}")
+        
         self.stats_task = asyncio.create_task(self._stats_loop())
         logger.info("BITFIELD FIX: Scheduler started")
     
@@ -165,6 +185,22 @@ class BitfieldFixedTorrentScheduler:
             self.tracker_task.cancel()
         if self.stats_task:
             self.stats_task.cancel()
+        if self.dht_announce_task:
+            self.dht_announce_task.cancel()
+        
+        # Stop DHT (for backward compatibility)
+        try:
+            await self.dht.stop()
+            logger.info("✅ DHT stopped successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to stop DHT: {e}")
+        
+        # Stop Peer Discovery Coordinator
+        try:
+            await self.peer_discovery.stop()
+            logger.info("✅ Peer Discovery Coordinator stopped successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to stop Peer Discovery Coordinator: {e}")
         
         logger.info("BITFIELD FIX: Scheduler stopped")
     
@@ -267,6 +303,18 @@ class BitfieldFixedTorrentScheduler:
             # Start tracker announcements
             session.tracker_task = asyncio.create_task(self._manage_trackers(session))
             
+            # Start DHT announcements (for backward compatibility)
+            self.dht_announce_task = asyncio.create_task(self._manage_dht_announces(session))
+            
+            # Add torrent to peer discovery coordinator
+            torrent_metadata = {
+                'name': session.metadata.name,
+                'peer_id': session.peer_id,
+                'total_size': session.metadata.total_size,
+                'piece_count': len(session.metadata.pieces_hash_list)
+            }
+            self.peer_discovery.add_torrent(session.info_hash, torrent_metadata)
+            
             # Set correct state
             if session.piece_manager.is_complete():
                 session.state = TorrentState.SEEDING
@@ -291,10 +339,15 @@ class BitfieldFixedTorrentScheduler:
             session.download_task.cancel()
         if session.tracker_task:
             session.tracker_task.cancel()
+        if self.dht_announce_task:
+            self.dht_announce_task.cancel()
         
         # Unregister from peer server
         if self.peer_server:
             self.peer_server.remove_torrent_session(session.info_hash)
+        
+        # Remove from peer discovery coordinator
+        self.peer_discovery.remove_torrent(session.info_hash)
         
         # Disconnect peers
         for peer_connection in list(session.peer_connections.values()):
@@ -353,10 +406,70 @@ class BitfieldFixedTorrentScheduler:
             await asyncio.sleep(5)  # Prevent tight loop on critical error
             await self._manage_trackers(session)  # Restart tracker management
     
+    async def _find_peers_dht(self, session: BitfieldFixedTorrentSession) -> List[Tuple[str, int]]:
+        """Find peers using DHT."""
+        try:
+            logger.info(f"🔍 DHT: Finding peers for {session.metadata.name}")
+            peers = await self.dht.get_peers(session.info_hash)
+            logger.info(f"✅ DHT: Found {len(peers)} peers")
+            return peers
+        except Exception as e:
+            logger.error(f"❌ DHT peer discovery failed: {e}")
+            return []
     
+    async def _manage_dht_announces(self, session: BitfieldFixedTorrentSession):
+        """Manage DHT announcements."""
+        logger.info(f"🌐 Starting DHT announce management for {session.metadata.name}")
+        
+        try:
+            # Initial announce
+            await self.dht.announce_peer(session.info_hash, session.port)
+            
+            # Periodic announces every 30 minutes
+            while self.running and session.state not in [TorrentState.STOPPED, TorrentState.ERROR]:
+                await asyncio.sleep(1800)  # 30 minutes
+                
+                if session.state in [TorrentState.DOWNLOADING, TorrentState.SEEDING]:
+                    await self.dht.announce_peer(session.info_hash, session.port)
+        except asyncio.CancelledError:
+            logger.info(f"DHT announce management cancelled")
+        except Exception as e:
+            logger.error(f"Error in DHT announce management: {e}")
     
     async def _announce_to_trackers(self, session: BitfieldFixedTorrentSession, event: TrackerEvent):
-        """Announce to trackers and connect to peers."""
+        """Announce to trackers and connect to peers using full hierarchy."""
+        # Use the new peer discovery coordinator
+        try:
+            # Update torrent metadata in coordinator
+            torrent_metadata = {
+                'name': session.metadata.name,
+                'peer_id': session.peer_id,
+                'total_size': session.metadata.total_size,
+                'piece_count': len(session.metadata.pieces_hash_list),
+                'uploaded': session.total_uploaded,
+                'downloaded': session.total_downloaded,
+                'left': session.storage.get_remaining_bytes(),
+                'event': event
+            }
+            self.peer_discovery.active_torrents[session.info_hash] = torrent_metadata
+            
+            # Discover peers using full hierarchy (DHT > PEX > LPD > Tracker)
+            peers = await self.peer_discovery.discover_peers(session.info_hash)
+            
+            if peers:
+                logger.info(f"🔗 Peer Discovery Hierarchy found {len(peers)} unique peers")
+                await self._connect_to_peers(session, peers)
+            else:
+                logger.info("🔍 No peers discovered through hierarchy")
+                
+        except Exception as e:
+            logger.error(f"Peer discovery hierarchy failed: {e}")
+            
+            # Fallback to old method if coordinator fails
+            await self._announce_to_trackers_fallback(session, event)
+    
+    async def _announce_to_trackers_fallback(self, session: BitfieldFixedTorrentSession, event: TrackerEvent):
+        """Fallback tracker announcement method."""
         try:
             responses = await session.tracker_manager.announce_all(
                 session.info_hash,
@@ -368,17 +481,21 @@ class BitfieldFixedTorrentScheduler:
                 event=event
             )
             
-            # Process peer responses
+            all_peers = []
             for response in responses:
                 if response.failure_reason:
                     logger.warning(f"Tracker failure: {response.failure_reason}")
                     continue
                 
-                logger.info(f"Tracker returned {len(response.peers)} peers")
-                await self._connect_to_peers(session, response.peers)
+                logger.info(f"📡 Fallback tracker returned {len(response.peers)} peers")
+                all_peers.extend(response.peers)
+            
+            if all_peers:
+                unique_peers = list(set(all_peers))
+                await self._connect_to_peers(session, unique_peers)
                 
         except Exception as e:
-            logger.error(f"Failed to announce to trackers: {e}")
+            logger.error(f"Fallback tracker announcement failed: {e}")
     
     async def _connect_to_peers(self, session: BitfieldFixedTorrentSession, peers: List[Tuple[str, int]]):
         """BITFIELD FIX: Connect to peers with proper callback setup."""
@@ -478,9 +595,20 @@ class BitfieldFixedTorrentScheduler:
                     
                     # Log statistics periodically
                     if int(time.time()) % 10 == 0:  # Every 10 seconds
+                        dht_stats = self.dht.get_stats()
+                        discovery_stats = self.peer_discovery.get_stats()
+                        
                         logger.debug(f"📊 Statistics: DL {format_bytes(self.session.total_downloaded)}, "
                                    f"UL {format_bytes(self.session.total_uploaded)}, "
                                    f"Rate {format_speed(self.session.download_rate)}")
+                        logger.debug(f"🌐 DHT Stats: {dht_stats['node_count']} nodes, "
+                                   f"{dht_stats['stored_torrents']} torrents, "
+                                   f"{dht_stats['stored_peers']} peers")
+                        logger.debug(f"🔍 Discovery Stats: {discovery_stats['total_stats']['total_peers_discovered']} total peers, "
+                                   f"DHT: {discovery_stats['method_stats']['dht']['peers']}, "
+                                   f"PEX: {discovery_stats['method_stats']['pex']['peers']}, "
+                                   f"LPD: {discovery_stats['method_stats']['lpd']['peers']}, "
+                                   f"Tracker: {discovery_stats['method_stats']['tracker']['peers']}")
                     
                     # Check state transitions
                     old_state = self.session.state
@@ -528,6 +656,8 @@ class BitfieldFixedTorrentScheduler:
         # Update statistics before returning
         self.session.update_statistics()
         piece_stats = self.session.piece_manager.get_stats()
+        dht_stats = self.dht.get_stats()
+        discovery_stats = self.peer_discovery.get_stats()
         
         return {
             'info_hash': self.session.info_hash.hex(),
@@ -544,7 +674,9 @@ class BitfieldFixedTorrentScheduler:
             'pieces_total': piece_stats.get('total_pieces', 0),
             'runtime': self.session.get_runtime(),
             'storage': self.session.storage,
-            'peer_connections': self.session.peer_connections
+            'peer_connections': self.session.peer_connections,
+            'dht_stats': dht_stats,
+            'discovery_stats': discovery_stats
         }
     
     def get_all_sessions(self) -> List[Dict]:

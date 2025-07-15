@@ -4,10 +4,7 @@
 #Bit-Torrent/src/core/cli_visualizer.py
 
 """
-FIXED: CLI Visualizer with Proper Statistics Updates
-===================================================
-
-Key Fix: Ensure statistics are properly retrieved and displayed
+CLI Visualizer with Proper Statistics Updates
 """
 
 import asyncio

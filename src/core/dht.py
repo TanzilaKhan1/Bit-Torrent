@@ -170,12 +170,21 @@ class DHT:
         # Rate limiting
         self.rate_limiter = RateLimiter(max_operations=100, time_window=60.0)
         
-        # Bootstrap nodes (BitTorrent mainline DHT)
+        # Bootstrap nodes (BitTorrent mainline DHT) - Updated with working nodes
         self.bootstrap_nodes = [
             ('router.bittorrent.com', 6881),
             ('dht.transmissionbt.com', 6881),
             ('router.utorrent.com', 6881),
+            ('dht.libtorrent.org', 25401),
+            ('bttracker.debian.org', 6881),
+            ('router.silotis.us', 6881),
+            ('87.98.162.88', 6881),  # Stable public DHT node
+            ('5.9.253.173', 6881),   # Another stable node
         ]
+        
+        # Peer storage for torrents
+        self.peer_store: Dict[bytes, Dict[bytes, Tuple[str, int, float]]] = {}  # info_hash -> {peer_id: (ip, port, timestamp)}
+        self.peer_expiry_time = 1800  # 30 minutes
         
         # Maintenance
         self.maintenance_task = None
@@ -186,6 +195,13 @@ class DHT:
     def _generate_node_id(self) -> bytes:
         """Generate a random 20-byte node ID."""
         return sha1(str(random.random()).encode()).digest()
+    
+    def _generate_token(self, addr: Tuple[str, int]) -> bytes:
+        """Generate a token for get_peers/announce_peer."""
+        # Simple token generation based on IP and current time
+        host, port = addr
+        token_data = f"{host}:{self.node_id.hex()}:{int(time.time() // 300)}"  # 5 minute intervals
+        return sha1(token_data.encode()).digest()[:8]  # 8 bytes token
     
     def _next_transaction_id(self) -> bytes:
         """Generate next transaction ID."""
@@ -250,21 +266,65 @@ class DHT:
         """Bootstrap the DHT by connecting to known nodes."""
         logger.info("Bootstrapping DHT...")
         
-        # Try to connect to bootstrap nodes
+        successful_pings = 0
+        max_attempts = 3
+        
+        # Try to connect to bootstrap nodes with retry logic
         for host, port in self.bootstrap_nodes:
+            for attempt in range(max_attempts):
+                try:
+                    if await self._ping_node(host, port):
+                        successful_pings += 1
+                        logger.info(f"Successfully pinged bootstrap node {host}:{port}")
+                        break
+                    else:
+                        logger.debug(f"Ping failed to {host}:{port} (attempt {attempt + 1})")
+                except Exception as e:
+                    logger.debug(f"Bootstrap ping error {host}:{port} (attempt {attempt + 1}): {e}")
+                
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.5)  # Wait before retry
+            
+            await asyncio.sleep(0.1)  # Small delay between different nodes
+        
+        logger.info(f"Bootstrap ping results: {successful_pings}/{len(self.bootstrap_nodes)} nodes responded")
+        
+        # Find nodes close to our own ID if we have any nodes
+        if self.routing_table.get_node_count() > 0:
             try:
-                await self._ping_node(host, port)
-                await asyncio.sleep(0.1)  # Small delay between requests
+                await self._find_nodes(self.node_id)
             except Exception as e:
-                logger.warning(f"Failed to ping bootstrap node {host}:{port}: {e}")
+                logger.warning(f"Failed to find nodes during bootstrap: {e}")
         
-        # Find nodes close to our own ID
-        try:
-            await self._find_nodes(self.node_id)
-        except Exception as e:
-            logger.warning(f"Failed to find nodes during bootstrap: {e}")
+        # If bootstrap failed completely, try alternative approach
+        if successful_pings == 0:
+            logger.warning("Bootstrap failed completely. Trying alternative bootstrap...")
+            await self._alternative_bootstrap()
         
-        logger.info(f"Bootstrap complete. Routing table has {self.routing_table.get_node_count()} nodes")
+        final_node_count = self.routing_table.get_node_count()
+        logger.info(f"Bootstrap complete. Routing table has {final_node_count} nodes")
+        
+        if final_node_count == 0:
+            logger.warning("DHT bootstrap failed - no nodes in routing table")
+        
+    async def _alternative_bootstrap(self):
+        """Alternative bootstrap method when primary fails."""
+        # Try to resolve DNS and ping directly
+        alternative_nodes = [
+            ('router.bittorrent.com', 6881),
+            ('dht.transmissionbt.com', 6881),
+        ]
+        
+        for host, port in alternative_nodes:
+            try:
+                # Try to resolve IP directly
+                import socket
+                ip = socket.gethostbyname(host)
+                if await self._ping_node(ip, port):
+                    logger.info(f"Alternative bootstrap succeeded: {host} ({ip}:{port})")
+                    break
+            except Exception as e:
+                logger.debug(f"Alternative bootstrap failed for {host}: {e}")
     
     async def _message_handler(self):
         """Handle incoming DHT messages."""
@@ -285,12 +345,41 @@ class DHT:
                 await asyncio.sleep(0.1)
     
     def _parse_message(self, data: bytes) -> Optional[DHTMessage]:
-        """Parse a DHT message."""
+        """Parse a DHT message with improved error handling."""
         try:
-            decoded = bencodepy.decode(data)
+            # Validate message size
+            if len(data) > 1024:
+                logger.warning(f"DHT message too large: {len(data)} bytes")
+                return None
+            
+            if len(data) < 10:
+                logger.warning(f"DHT message too small: {len(data)} bytes")
+                return None
+            
+            # Try to decode with better error handling
+            try:
+                decoded = bencodepy.decode(data)
+            except Exception as decode_error:
+                logger.debug(f"Bencode decode error: {decode_error}")
+                return None
+            
+            # Validate required fields
+            if not isinstance(decoded, dict):
+                logger.warning("DHT message is not a dictionary")
+                return None
             
             transaction_id = decoded.get(b't', b'')
-            message_type = decoded.get(b'y', b'').decode('utf-8')
+            message_type_bytes = decoded.get(b'y', b'')
+            
+            if not message_type_bytes:
+                logger.warning("DHT message missing message type")
+                return None
+            
+            try:
+                message_type = message_type_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                logger.warning("DHT message type decode error")
+                return None
             
             message = DHTMessage(
                 transaction_id=transaction_id,
@@ -299,7 +388,13 @@ class DHT:
             
             if message_type == 'q':
                 # Query
-                message.query_type = decoded.get(b'q', b'').decode('utf-8')
+                query_type_bytes = decoded.get(b'q', b'')
+                if query_type_bytes:
+                    try:
+                        message.query_type = query_type_bytes.decode('utf-8')
+                    except UnicodeDecodeError:
+                        logger.warning("DHT query type decode error")
+                        return None
                 message.arguments = decoded.get(b'a', {})
                 
             elif message_type == 'r':
@@ -310,12 +405,19 @@ class DHT:
                 # Error
                 error_list = decoded.get(b'e', [])
                 if len(error_list) >= 2:
-                    message.error = (error_list[0], error_list[1].decode('utf-8'))
+                    try:
+                        error_message = error_list[1]
+                        if isinstance(error_message, bytes):
+                            error_message = error_message.decode('utf-8')
+                        message.error = (error_list[0], error_message)
+                    except (UnicodeDecodeError, IndexError):
+                        logger.warning("DHT error message decode error")
+                        return None
             
             return message
             
         except Exception as e:
-            logger.error(f"Failed to parse DHT message: {e}")
+            logger.debug(f"Failed to parse DHT message: {e}")
             return None
     
     async def _handle_message(self, message: DHTMessage, addr: Tuple[str, int]):
@@ -414,10 +516,38 @@ class DHT:
             node = DHTNode(node_id, host, port)
             self.routing_table.add_node(node)
         
-        # For simplicity, we don't store peer information
-        # Just return closest nodes
         info_hash = message.arguments.get(b'info_hash', b'')
         if len(info_hash) == 20:
+            response = {
+                b'id': self.node_id,
+                b'token': self._generate_token(addr)  # Generate proper token
+            }
+            
+            # Check if we have peers for this info_hash
+            if info_hash in self.peer_store:
+                peers = self.peer_store[info_hash]
+                current_time = time.time()
+                
+                # Filter out expired peers and encode in compact format
+                peer_values = []
+                for peer_id, (peer_host, peer_port, timestamp) in list(peers.items()):
+                    if current_time - timestamp < self.peer_expiry_time:
+                        try:
+                            # Encode peer in compact format (6 bytes: 4 for IP, 2 for port)
+                            peer_data = socket.inet_aton(peer_host) + struct.pack('>H', peer_port)
+                            peer_values.append(peer_data)
+                        except socket.error:
+                            # Remove invalid peer
+                            del peers[peer_id]
+                    else:
+                        # Remove expired peer
+                        del peers[peer_id]
+                
+                if peer_values:
+                    response[b'values'] = peer_values
+                    logger.info(f"Returning {len(peer_values)} peers for info_hash {info_hash.hex()[:16]}")
+            
+            # Always return closest nodes as well
             closest_nodes = self.routing_table.find_closest_nodes(info_hash, 8)
             
             # Encode nodes in compact format
@@ -427,11 +557,9 @@ class DHT:
                 nodes_data += socket.inet_aton(node.host)
                 nodes_data += struct.pack('>H', node.port)
             
-            response = {
-                b'id': self.node_id,
-                b'token': b'dummy_token',  # Simplified token
-                b'nodes': nodes_data
-            }
+            if nodes_data:
+                response[b'nodes'] = nodes_data
+            
             await self._send_response(message.transaction_id, response, addr)
         else:
             await self._send_error(message.transaction_id, 203, "Protocol Error", addr)
@@ -446,8 +574,27 @@ class DHT:
             node = DHTNode(node_id, host, port)
             self.routing_table.add_node(node)
         
-        # For simplicity, we don't store peer announcements
-        # Just acknowledge the request
+        # Store peer announcement
+        info_hash = message.arguments.get(b'info_hash')
+        peer_id = message.arguments.get(b'id')
+        announced_port = message.arguments.get(b'port')
+        
+        if info_hash and peer_id and announced_port and len(info_hash) == 20:
+            # Use the announced port if provided, otherwise use the source port
+            if isinstance(announced_port, int):
+                peer_port = announced_port
+            else:
+                peer_port = port
+            
+            # Store peer in peer_store
+            if info_hash not in self.peer_store:
+                self.peer_store[info_hash] = {}
+            
+            self.peer_store[info_hash][peer_id] = (host, peer_port, time.time())
+            
+            logger.info(f"Stored peer announcement: {host}:{peer_port} for info_hash {info_hash.hex()[:16]}")
+        
+        # Send acknowledgment
         response = {
             b'id': self.node_id
         }
@@ -650,6 +797,55 @@ class DHT:
         
         return peers
     
+    async def announce_peer(self, info_hash: bytes, port: int) -> bool:
+        """Announce ourselves as a peer for a torrent."""
+        logger.info(f"Announcing peer for info_hash {info_hash.hex()[:16]} on port {port}")
+        
+        # Find nodes close to the info hash
+        closest_nodes = self.routing_table.find_closest_nodes(info_hash, 8)
+        
+        if not closest_nodes:
+            logger.warning("No nodes available for DHT announce")
+            return False
+        
+        successful_announces = 0
+        
+        # Announce to closest nodes
+        for node in closest_nodes:
+            try:
+                # First get peers to obtain token
+                get_peers_args = {
+                    b'id': self.node_id,
+                    b'info_hash': info_hash
+                }
+                
+                response = await self._send_query('get_peers', get_peers_args, (node.host, node.port))
+                
+                if response and b'token' in response:
+                    # Now announce with the token
+                    announce_args = {
+                        b'id': self.node_id,
+                        b'info_hash': info_hash,
+                        b'port': port,
+                        b'token': response[b'token']
+                    }
+                    
+                    announce_response = await self._send_query('announce_peer', announce_args, (node.host, node.port))
+                    
+                    if announce_response:
+                        successful_announces += 1
+                        logger.debug(f"Successfully announced to {node.host}:{node.port}")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to announce to {node.host}:{node.port}: {e}")
+        
+        logger.info(f"Announced to {successful_announces}/{len(closest_nodes)} nodes")
+        return successful_announces > 0
+    
+    async def get_peers(self, info_hash: bytes) -> List[Tuple[str, int]]:
+        """Get peers for a torrent (wrapper for find_peers)."""
+        return await self.find_peers(info_hash)
+    
     async def _maintenance_loop(self):
         """DHT maintenance loop."""
         while self.running:
@@ -665,6 +861,27 @@ class DHT:
                 
                 if expired_nodes:
                     logger.info(f"Removed {len(expired_nodes)} expired nodes")
+                
+                # Clean up expired peers
+                current_time = time.time()
+                total_expired_peers = 0
+                
+                for info_hash, peers in list(self.peer_store.items()):
+                    expired_peer_ids = []
+                    for peer_id, (host, port, timestamp) in peers.items():
+                        if current_time - timestamp > self.peer_expiry_time:
+                            expired_peer_ids.append(peer_id)
+                    
+                    for peer_id in expired_peer_ids:
+                        del peers[peer_id]
+                        total_expired_peers += 1
+                    
+                    # Remove empty info_hash entries
+                    if not peers:
+                        del self.peer_store[info_hash]
+                
+                if total_expired_peers > 0:
+                    logger.info(f"Removed {total_expired_peers} expired peers")
                 
                 # Refresh routing table
                 if self.routing_table.get_node_count() > 0:
@@ -682,10 +899,13 @@ class DHT:
     
     def get_stats(self) -> Dict:
         """Get DHT statistics."""
+        total_stored_peers = sum(len(peers) for peers in self.peer_store.values())
         return {
             'node_id': self.node_id.hex(),
             'node_count': self.routing_table.get_node_count(),
             'pending_transactions': len(self.pending_transactions),
+            'stored_torrents': len(self.peer_store),
+            'stored_peers': total_stored_peers,
             'running': self.running
         }
 
