@@ -1,12 +1,27 @@
+#!/usr/bin/env python3
+
+#Bit-Torrent/src/core/scheduler.py
+
+"""
+BITFIELD FIX: Scheduler with Proper Callback Setup and Bitfield Handling
+========================================================================
+
+Key fixes:
+1. Set up all callbacks BEFORE starting message loop
+2. Ensure piece manager callbacks work correctly with bitfield
+3. Fix timing issues in peer connection management
+"""
+
 import asyncio
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 from .utils import get_logger, generate_peer_id, format_speed, format_bytes
-from .torrent_parser import TorrentMetadata, load_torrent_file, parse_magnet_uri
-from .storage import TorrentStorage
+from .torrent_parser import TorrentMetadata, load_torrent_file
+from .storage import TorrentStorage, PeerStorage
 from .piece_manager import PieceManager
 from .peer_connection import PeerConnection
 from .tracker_client import TrackerManager, TrackerEvent
@@ -14,18 +29,17 @@ from .tracker_client import TrackerManager, TrackerEvent
 logger = get_logger(__name__)
 
 class TorrentState(Enum):
-    """Torrent download states."""
+    """Torrent states."""
     STOPPED = "stopped"
     STARTING = "starting"
     DOWNLOADING = "downloading"
     SEEDING = "seeding"
-    PAUSED = "paused"
-    ERROR = "error"
     COMPLETED = "completed"
+    ERROR = "error"
 
 @dataclass
-class TorrentSession:
-    """Represents an active torrent download session."""
+class BitfieldFixedTorrentSession:
+    """Torrent session with proper bitfield handling."""
     info_hash: bytes
     metadata: TorrentMetadata
     storage: TorrentStorage
@@ -35,47 +49,98 @@ class TorrentSession:
     peer_connections: Dict[str, PeerConnection]
     peer_id: bytes
     port: int
-    
-    # Statistics
     start_time: float
+    
+    # Statistics tracking
     total_downloaded: int = 0
     total_uploaded: int = 0
     download_rate: float = 0.0
     upload_rate: float = 0.0
+    last_stats_update: float = 0.0
+    last_downloaded: int = 0
+    last_uploaded: int = 0
     
-    # Tasks
+    # Background tasks
     download_task: Optional[asyncio.Task] = None
     tracker_task: Optional[asyncio.Task] = None
     
     def get_runtime(self) -> float:
         """Get total runtime in seconds."""
         return time.time() - self.start_time
+    
+    def update_statistics(self):
+        """Update transfer statistics."""
+        current_time = time.time()
+    
+        # Get current totals
+        storage_downloaded = self.storage.get_downloaded_bytes()
+        peer_downloaded = 0
+        peer_uploaded = 0
+    
+        for peer_connection in self.peer_connections.values():
+            downloaded, uploaded, _ = peer_connection.get_stats()
+            peer_downloaded += downloaded
+            peer_uploaded += uploaded
+    
+        # Update totals
+        self.total_downloaded = peer_downloaded  # Use only peer_downloaded
+        self.total_uploaded = peer_uploaded
+    
+        # Calculate rates
+        if self.last_stats_update > 0:
+            time_diff = current_time - self.last_stats_update
+            if time_diff > 0:
+                downloaded_diff = self.total_downloaded - self.last_downloaded
+                uploaded_diff = self.total_uploaded - self.last_uploaded
+            
+                self.download_rate = max(0, downloaded_diff / time_diff)
+                self.upload_rate = max(0, uploaded_diff / time_diff)
+    
+        # Store current values for next calculation
+        self.last_stats_update = current_time
+        self.last_downloaded = self.total_downloaded
+        self.last_uploaded = self.total_uploaded    
+    
+    
+    
+    async def update_peers_after_recheck(self):
+        """Update peers after recheck."""
+        for peer in self.active_peers.values():
+            peer.set_available_pieces(self.storage.verified_pieces)
+            await peer.send_bitfield()
 
-class TorrentScheduler:
-    """Manages multiple torrent downloads and scheduling."""
+
+
+class BitfieldFixedTorrentScheduler:
+    """BITFIELD FIX: Scheduler with proper bitfield handling."""
     
     def __init__(self, download_dir: str = "./downloads", listen_port: int = 6881):
         self.download_dir = download_dir
         self.listen_port = listen_port
         self.peer_id = generate_peer_id()
         
-        # Active sessions
-        self.sessions: Dict[bytes, TorrentSession] = {}
+        # Single session for simplicity
+        self.session: Optional[BitfieldFixedTorrentSession] = None
         
-        # Global configuration
-        self.max_concurrent_torrents = 5
-        self.max_peers_per_torrent = 50
-        self.max_upload_rate = 0  # 0 = unlimited
-        self.max_download_rate = 0  # 0 = unlimited
+        # External components
+        self.peer_server = None
+        
+        # Configuration
+        self.max_peers = 10
+        self.tracker_url = "http://localhost:8080/announce"
         
         # Background tasks
-        self.scheduler_task = None
+        self.tracker_task = None
         self.stats_task = None
         
         # State
         self.running = False
         
-        logger.info(f"Initialized BitTorrent scheduler with peer ID: {self.peer_id.hex()}")
+        logger.info(f"BITFIELD FIX: Initialized scheduler with peer ID: {self.peer_id.hex()}")
+    
+    def set_peer_server(self, peer_server):
+        """Set the peer server instance."""
+        self.peer_server = peer_server
     
     async def start(self):
         """Start the scheduler."""
@@ -83,12 +148,8 @@ class TorrentScheduler:
             return
         
         self.running = True
-        
-        # Start background tasks
-        self.scheduler_task = asyncio.create_task(self._scheduler_loop())
         self.stats_task = asyncio.create_task(self._stats_loop())
-        
-        logger.info("BitTorrent scheduler started")
+        logger.info("BITFIELD FIX: Scheduler started")
     
     async def stop(self):
         """Stop the scheduler."""
@@ -97,116 +158,130 @@ class TorrentScheduler:
         
         self.running = False
         
-        # Stop all sessions
-        for session in list(self.sessions.values()):
-            await self._stop_session(session)
+        if self.session:
+            await self._stop_session(self.session)
         
-        # Cancel background tasks
-        if self.scheduler_task:
-            self.scheduler_task.cancel()
+        if self.tracker_task:
+            self.tracker_task.cancel()
         if self.stats_task:
             self.stats_task.cancel()
         
-        logger.info("BitTorrent scheduler stopped")
+        logger.info("BITFIELD FIX: Scheduler stopped")
     
     async def add_torrent_file(self, torrent_path: str) -> bool:
-        """Add a torrent from a .torrent file."""
+        """Add a torrent from file."""
         try:
+            if self.session and self.session.state != TorrentState.STOPPED:
+                logger.warning("Only one torrent allowed at a time")
+                return False
+            
             metadata = load_torrent_file(torrent_path)
             return await self._add_torrent(metadata)
         except Exception as e:
             logger.error(f"Failed to add torrent file {torrent_path}: {e}")
             return False
     
-    async def add_magnet_uri(self, magnet_uri: str) -> bool:
-        """Add a torrent from a magnet URI."""
-        try:
-            magnet_data = parse_magnet_uri(magnet_uri)
-            
-            # For magnet URIs, we need to get metadata from peers
-            # This is a simplified implementation
-            # In a real implementation, you'd need to implement BEP-0009 (Extension for Peers to Send Metadata Files)
-            
-            logger.warning("Magnet URI support is limited - metadata exchange not implemented")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Failed to add magnet URI {magnet_uri}: {e}")
-            return False
-    
     async def _add_torrent(self, metadata: TorrentMetadata) -> bool:
-        """Add a torrent to the scheduler."""
-        info_hash = metadata.info_hash
-        
-        # Check if already exists
-        if info_hash in self.sessions:
-            logger.warning(f"Torrent {metadata.name} already exists")
-            return False
-        
-        # Check concurrent limit
-        active_sessions = sum(1 for s in self.sessions.values() if s.state == TorrentState.DOWNLOADING)
-        if active_sessions >= self.max_concurrent_torrents:
-            logger.warning(f"Maximum concurrent torrents reached ({self.max_concurrent_torrents})")
-            return False
-        
+        """BITFIELD FIX: Add torrent with proper initialization order."""
         try:
+            logger.info(f"📋 BITFIELD FIX: Adding torrent: {metadata.name}")
+            
             # Create storage
-            storage = TorrentStorage(metadata, self.download_dir)
+            if "peer" in self.download_dir.lower():
+                peer_dir = Path(self.download_dir).parent if Path(self.download_dir).name == "downloaded" else Path(self.download_dir)
+                storage = PeerStorage(metadata, str(peer_dir))
+            else:
+                storage = TorrentStorage(metadata, self.download_dir)
+            
+            # CRITICAL: Initialize storage first
+            logger.info("🔄 BITFIELD FIX: Initializing storage...")
+            await storage.initialize_existing_pieces()
+            
+            verified_pieces = storage.get_verified_pieces()
+            total_pieces = len(metadata.pieces_hash_list)
+            logger.info(f"✅ Storage initialized: {len(verified_pieces)}/{total_pieces} pieces verified")
             
             # Create piece manager
             piece_manager = PieceManager(metadata, storage)
             
             # Create tracker manager
-            tracker_manager = TrackerManager(metadata.trackers)
+            trackers = [self.tracker_url]
+            if metadata.trackers:
+                trackers.extend(metadata.trackers)
+            tracker_manager = TrackerManager(trackers)
+            
+            # Determine initial state
+            initial_state = TorrentState.SEEDING if piece_manager.is_complete() else TorrentState.STOPPED
             
             # Create session
-            session = TorrentSession(
-                info_hash=info_hash,
+            self.session = BitfieldFixedTorrentSession(
+                info_hash=metadata.info_hash,
                 metadata=metadata,
                 storage=storage,
                 piece_manager=piece_manager,
                 tracker_manager=tracker_manager,
-                state=TorrentState.STOPPED,
+                state=initial_state,
                 peer_connections={},
                 peer_id=self.peer_id,
                 port=self.listen_port,
                 start_time=time.time()
             )
             
-            self.sessions[info_hash] = session
+            # Initialize statistics
+            self.session.total_downloaded = storage.get_downloaded_bytes()
+            self.session.last_downloaded = self.session.total_downloaded
+            self.session.last_stats_update = time.time()
             
-            # Start the session
-            await self._start_session(session)
+            # Start session
+            await self._start_session(self.session)
             
-            logger.info(f"Added torrent: {metadata.name}")
+            logger.info(f"✅ BITFIELD FIX: Added torrent: {metadata.name} (state: {initial_state.value})")
             return True
             
         except Exception as e:
             logger.error(f"Failed to add torrent {metadata.name}: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
-    async def _start_session(self, session: TorrentSession):
-        """Start a torrent session."""
-        if session.state != TorrentState.STOPPED:
-            return
-        
-        session.state = TorrentState.STARTING
+    async def _start_session(self, session: BitfieldFixedTorrentSession):
+        """Start a torrent session with proper setup."""
+        if session.state == TorrentState.STOPPED:
+            session.state = TorrentState.STARTING
         
         try:
+            # Register with peer server
+            if self.peer_server:
+                session_info = {
+                    'name': session.metadata.name,
+                    'peer_id': session.peer_id,
+                    'piece_manager': session.piece_manager,
+                    'storage': session.storage
+                }
+                self.peer_server.add_torrent_session(session.info_hash, session_info)
+                logger.info(f"📋 BITFIELD FIX: Registered session with peer server")
+            
             # Start download management
             session.download_task = asyncio.create_task(session.piece_manager.manage_downloads())
             
             # Start tracker announcements
             session.tracker_task = asyncio.create_task(self._manage_trackers(session))
             
-            session.state = TorrentState.DOWNLOADING
-            logger.info(f"Started session for {session.metadata.name}")
+            # Set correct state
+            if session.piece_manager.is_complete():
+                session.state = TorrentState.SEEDING
+                logger.info(f"✅ BITFIELD FIX: Starting as SEEDER")
+            else:
+                session.state = TorrentState.DOWNLOADING
+                logger.info(f"🔄 BITFIELD FIX: Starting as DOWNLOADER")
+            
+            logger.info(f"✅ Started session for {session.metadata.name}")
             
         except Exception as e:
-            logger.error(f"Failed to start session for {session.metadata.name}: {e}")
+            logger.error(f"Failed to start session: {e}")
             session.state = TorrentState.ERROR
     
-    async def _stop_session(self, session: TorrentSession):
+    async def _stop_session(self, session: BitfieldFixedTorrentSession):
         """Stop a torrent session."""
         if session.state == TorrentState.STOPPED:
             return
@@ -216,6 +291,10 @@ class TorrentScheduler:
             session.download_task.cancel()
         if session.tracker_task:
             session.tracker_task.cancel()
+        
+        # Unregister from peer server
+        if self.peer_server:
+            self.peer_server.remove_torrent_session(session.info_hash)
         
         # Disconnect peers
         for peer_connection in list(session.peer_connections.values()):
@@ -234,7 +313,7 @@ class TorrentScheduler:
                 event=TrackerEvent.STOPPED
             )
         except Exception as e:
-            logger.error(f"Failed to announce stop to trackers: {e}")
+            logger.error(f"Failed to announce stop: {e}")
         
         # Shutdown components
         await session.piece_manager.shutdown()
@@ -244,24 +323,40 @@ class TorrentScheduler:
         session.state = TorrentState.STOPPED
         logger.info(f"Stopped session for {session.metadata.name}")
     
-    async def _manage_trackers(self, session: TorrentSession):
-        """Manage tracker announcements for a session."""
+    
+    
+    async def _manage_trackers(self, session: BitfieldFixedTorrentSession):
+        """Manage tracker announcements."""
         try:
             # Initial announce
-            await self._announce_to_trackers(session, TrackerEvent.STARTED)
-            
+            if session.state == TorrentState.SEEDING:
+                await self._announce_to_trackers(session, TrackerEvent.COMPLETED)
+            else:
+                await self._announce_to_trackers(session, TrackerEvent.STARTED)
+        
             # Periodic announces
             while session.state in [TorrentState.DOWNLOADING, TorrentState.SEEDING]:
-                await asyncio.sleep(300)  # 5 minutes
-                await self._announce_to_trackers(session, TrackerEvent.NONE)
-                
+                try:
+                    await asyncio.sleep(30)
+                    await self._announce_to_trackers(session, TrackerEvent.NONE)
+                except Exception as e:
+                    logger.error(f"Error in periodic tracker announcement: {e}")
+                    continue  # Continue the loop instead of crashing
         except asyncio.CancelledError:
-            logger.info(f"Tracker management cancelled for {session.metadata.name}")
+            logger.info(f"Tracker management cancelled")
         except Exception as e:
-            logger.error(f"Error in tracker management for {session.metadata.name}: {e}")
+            logger.error(f"Critical error in tracker management: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Continue running instead of terminating
+            session.state = TorrentState.ERROR
+            await asyncio.sleep(5)  # Prevent tight loop on critical error
+            await self._manage_trackers(session)  # Restart tracker management
     
-    async def _announce_to_trackers(self, session: TorrentSession, event: TrackerEvent):
-        """Announce to trackers and handle peer responses."""
+    
+    
+    async def _announce_to_trackers(self, session: BitfieldFixedTorrentSession, event: TrackerEvent):
+        """Announce to trackers and connect to peers."""
         try:
             responses = await session.tracker_manager.announce_all(
                 session.info_hash,
@@ -279,14 +374,16 @@ class TorrentScheduler:
                     logger.warning(f"Tracker failure: {response.failure_reason}")
                     continue
                 
-                # Connect to new peers
+                logger.info(f"Tracker returned {len(response.peers)} peers")
                 await self._connect_to_peers(session, response.peers)
                 
         except Exception as e:
             logger.error(f"Failed to announce to trackers: {e}")
     
-    async def _connect_to_peers(self, session: TorrentSession, peers: List[Tuple[str, int]]):
-        """Connect to new peers."""
+    async def _connect_to_peers(self, session: BitfieldFixedTorrentSession, peers: List[Tuple[str, int]]):
+        """BITFIELD FIX: Connect to peers with proper callback setup."""
+        logger.info(f"BITFIELD FIX: Connecting to {len(peers)} peers for {session.metadata.name}")
+        
         for host, port in peers:
             peer_id = f"{host}:{port}"
             
@@ -294,11 +391,18 @@ class TorrentScheduler:
             if peer_id in session.peer_connections:
                 continue
             
+            # Skip self
+            if port == self.listen_port and host in ['localhost', '127.0.0.1']:
+                continue
+            
             # Check peer limit
-            if len(session.peer_connections) >= self.max_peers_per_torrent:
+            if len(session.peer_connections) >= self.max_peers:
+                logger.info(f"Peer limit reached ({self.max_peers})")
                 break
             
             try:
+                logger.info(f"BITFIELD FIX: Connecting to peer {peer_id}")
+                
                 # Create peer connection
                 peer_connection = PeerConnection(
                     host=host,
@@ -307,178 +411,161 @@ class TorrentScheduler:
                     peer_id=session.peer_id
                 )
                 
+                # BITFIELD FIX: Set up ALL information BEFORE connecting
+                peer_connection.set_available_pieces(session.piece_manager.completed_pieces)
+                peer_connection.set_needed_pieces(session.piece_manager.pending_pieces)
+                peer_connection.total_pieces = session.piece_manager.total_pieces
+                
+                # BITFIELD FIX: Set up callbacks BEFORE connecting
+                def make_bitfield_callback(peer_id):
+                    def callback(pieces):
+                        logger.info(f"🎯 BITFIELD FIX: Bitfield callback for {peer_id}: {len(pieces)} pieces")
+                        session.piece_manager._on_bitfield_received(peer_id, pieces)
+                    return callback
+                
+                def make_unchoked_callback(peer_id):
+                    def callback():
+                        logger.info(f"🔓 BITFIELD FIX: Unchoked callback for {peer_id}")
+                        session.piece_manager._on_peer_unchoked(peer_id)
+                    return callback
+                
+                peer_connection.on_piece_received = session.piece_manager._on_piece_received
+                peer_connection.on_have_received = session.piece_manager._on_have_received
+                peer_connection.on_bitfield_received = make_bitfield_callback(peer_id)
+                peer_connection.on_piece_request = session.piece_manager._on_piece_request
+                peer_connection.on_unchoked = make_unchoked_callback(peer_id)
+                
+                logger.info(f"✅ BITFIELD FIX: Set up callbacks for {peer_id}")
+                
                 # Connect to peer
                 if await peer_connection.connect():
                     session.peer_connections[peer_id] = peer_connection
+                    
+                    # Add to piece manager AFTER successful connection
                     session.piece_manager.add_peer(peer_id, peer_connection)
                     
-                    # Start message loop
+                    # Start message loop AFTER everything is set up
                     asyncio.create_task(peer_connection.start_message_loop())
                     
-                    logger.info(f"Connected to peer {peer_id}")
+                    logger.info(f"✅ BITFIELD FIX: Successfully connected to peer {peer_id}")
                 else:
-                    logger.warning(f"Failed to connect to peer {peer_id}")
+                    logger.warning(f"❌ Failed to connect to peer {peer_id}")
                     
             except Exception as e:
                 logger.error(f"Error connecting to peer {peer_id}: {e}")
-    
-    async def _scheduler_loop(self):
-        """Main scheduler loop."""
-        while self.running:
-            try:
-                # Check session states
-                for session in list(self.sessions.values()):
-                    await self._update_session_state(session)
-                
-                # Rate limiting and bandwidth management
-                await self._manage_bandwidth()
-                
-                # Sleep before next iteration
-                await asyncio.sleep(1.0)
-                
-            except asyncio.CancelledError:
-                logger.info("Scheduler loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in scheduler loop: {e}")
-                await asyncio.sleep(1.0)
-    
-    async def _update_session_state(self, session: TorrentSession):
-        """Update session state based on progress."""
-        if session.state == TorrentState.DOWNLOADING:
-            # Check if download is complete
-            if session.piece_manager.is_complete():
-                session.state = TorrentState.COMPLETED
-                logger.info(f"Download completed: {session.metadata.name}")
-                
-                # Announce completion
-                await self._announce_to_trackers(session, TrackerEvent.COMPLETED)
-                
-                # Transition to seeding
-                session.state = TorrentState.SEEDING
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
         
-        elif session.state == TorrentState.SEEDING:
-            # Continue seeding (implement seeding logic here)
-            pass
+        logger.info(f"Total connected peers: {len(session.peer_connections)}")
     
-    async def _manage_bandwidth(self):
-        """Manage bandwidth allocation across sessions."""
-        # This is a simplified implementation
-        # In a real implementation, you'd implement proper bandwidth management
-        pass
+    
     
     async def _stats_loop(self):
-        """Background task for updating statistics."""
+        """Background statistics update loop."""
         while self.running:
             try:
-                for session in self.sessions.values():
-                    # Update session statistics
-                    stats = session.piece_manager.get_stats()
-                    session.download_rate = stats.get('download_rate', 0)
+                if self.session:
+                    # Update statistics
+                    self.session.update_statistics()
                     
-                    # Update peer statistics
-                    for peer_id, peer_connection in session.peer_connections.items():
-                        downloaded, uploaded, pending = peer_connection.get_stats()
-                        session.total_downloaded += downloaded
-                        session.total_uploaded += uploaded
+                    # Get piece manager stats
+                    piece_stats = self.session.piece_manager.get_stats()
+                    
+                    # Update download rate from piece manager
+                    piece_download_rate = piece_stats.get('download_rate', 0)
+                    if piece_download_rate > 0:
+                        self.session.download_rate = piece_download_rate
+                    
+                    # Log statistics periodically
+                    if int(time.time()) % 10 == 0:  # Every 10 seconds
+                        logger.debug(f"📊 Statistics: DL {format_bytes(self.session.total_downloaded)}, "
+                                   f"UL {format_bytes(self.session.total_uploaded)}, "
+                                   f"Rate {format_speed(self.session.download_rate)}")
+                    
+                    # Check state transitions
+                    old_state = self.session.state
+                    
+                    if self.session.state == TorrentState.DOWNLOADING:
+                        if self.session.piece_manager.is_complete():
+                            self.session.state = TorrentState.COMPLETED
+                            logger.info(f"✅ BITFIELD FIX: Download completed: {self.session.metadata.name}")
+                            
+                            # Announce completion
+                            await self._announce_to_trackers(self.session, TrackerEvent.COMPLETED)
+                            
+                            # Transition to seeding
+                            self.session.state = TorrentState.SEEDING
+                            logger.info(f"🌱 BITFIELD FIX: Now seeding: {self.session.metadata.name}")
+                    
+                    elif self.session.state == TorrentState.STARTING:
+                        if self.session.piece_manager.is_complete():
+                            self.session.state = TorrentState.SEEDING
+                            logger.info(f"🌱 BITFIELD FIX: Started as seeder")
+                        else:
+                            self.session.state = TorrentState.DOWNLOADING
+                            logger.info(f"🔄 BITFIELD FIX: Started as downloader")
+                    
+                    # Log state changes
+                    if old_state != self.session.state:
+                        logger.info(f"🔄 State changed: {old_state.value} -> {self.session.state.value}")
                 
-                await asyncio.sleep(5.0)  # Update every 5 seconds
-                
+                await asyncio.sleep(2.0)
             except asyncio.CancelledError:
-                logger.info("Stats loop cancelled")
                 break
             except Exception as e:
                 logger.error(f"Error in stats loop: {e}")
-                await asyncio.sleep(5.0)
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                await asyncio.sleep(2.0)  # Continue the loop instead of crashing
     
-    def remove_torrent(self, info_hash: bytes, delete_files: bool = False):
-        """Remove a torrent from the scheduler."""
-        if info_hash not in self.sessions:
-            return False
-        
-        session = self.sessions[info_hash]
-        
-        # Stop session
-        asyncio.create_task(self._stop_session(session))
-        
-        # Remove from sessions
-        del self.sessions[info_hash]
-        
-        # Delete files if requested
-        if delete_files:
-            # Implement file deletion logic
-            pass
-        
-        logger.info(f"Removed torrent: {session.metadata.name}")
-        return True
     
-    def pause_torrent(self, info_hash: bytes):
-        """Pause a torrent."""
-        if info_hash not in self.sessions:
-            return False
-        
-        session = self.sessions[info_hash]
-        if session.state == TorrentState.DOWNLOADING:
-            session.state = TorrentState.PAUSED
-            logger.info(f"Paused torrent: {session.metadata.name}")
-            return True
-        
-        return False
     
-    def resume_torrent(self, info_hash: bytes):
-        """Resume a paused torrent."""
-        if info_hash not in self.sessions:
-            return False
-        
-        session = self.sessions[info_hash]
-        if session.state == TorrentState.PAUSED:
-            session.state = TorrentState.DOWNLOADING
-            logger.info(f"Resumed torrent: {session.metadata.name}")
-            return True
-        
-        return False
-    
-    def get_session_stats(self, info_hash: bytes) -> Optional[Dict]:
-        """Get statistics for a specific session."""
-        if info_hash not in self.sessions:
+    def get_session_stats(self) -> Optional[Dict]:
+        """Get session statistics."""
+        if not self.session:
             return None
         
-        session = self.sessions[info_hash]
-        piece_stats = session.piece_manager.get_stats()
+        # Update statistics before returning
+        self.session.update_statistics()
+        piece_stats = self.session.piece_manager.get_stats()
         
         return {
-            'name': session.metadata.name,
-            'state': session.state.value,
+            'info_hash': self.session.info_hash.hex(),
+            'name': self.session.metadata.name,
+            'state': self.session.state.value,
             'progress_percentage': piece_stats.get('progress_percentage', 0),
-            'download_rate': format_speed(session.download_rate),
-            'upload_rate': format_speed(session.upload_rate),
-            'total_downloaded': format_bytes(session.total_downloaded),
-            'total_uploaded': format_bytes(session.total_uploaded),
-            'total_size': format_bytes(session.metadata.total_size),
-            'peers_connected': len(session.peer_connections),
+            'download_rate': self.session.download_rate,
+            'upload_rate': self.session.upload_rate,
+            'total_downloaded': self.session.total_downloaded,
+            'total_uploaded': self.session.total_uploaded,
+            'total_size': self.session.metadata.total_size,
+            'peers_connected': len(self.session.peer_connections),
             'pieces_completed': piece_stats.get('completed_pieces', 0),
             'pieces_total': piece_stats.get('total_pieces', 0),
-            'runtime': session.get_runtime()
+            'runtime': self.session.get_runtime(),
+            'storage': self.session.storage,
+            'peer_connections': self.session.peer_connections
         }
     
     def get_all_sessions(self) -> List[Dict]:
-        """Get statistics for all sessions."""
-        return [
-            self.get_session_stats(info_hash)
-            for info_hash in self.sessions.keys()
-        ]
+        """Get all session statistics."""
+        stats = self.get_session_stats()
+        return [stats] if stats else []
     
     def get_global_stats(self) -> Dict:
         """Get global scheduler statistics."""
-        total_download_rate = sum(s.download_rate for s in self.sessions.values())
-        total_upload_rate = sum(s.upload_rate for s in self.sessions.values())
+        active_torrents = 1 if self.session and self.session.state != TorrentState.STOPPED else 0
+        download_rate = self.session.download_rate if self.session else 0
+        upload_rate = self.session.upload_rate if self.session else 0
         
         return {
-            'active_torrents': len(self.sessions),
-            'total_download_rate': format_speed(total_download_rate),
-            'total_upload_rate': format_speed(total_upload_rate),
-            'max_concurrent_torrents': self.max_concurrent_torrents,
-            'max_peers_per_torrent': self.max_peers_per_torrent,
+            'active_torrents': active_torrents,
+            'total_download_rate': format_speed(download_rate),
+            'total_upload_rate': format_speed(upload_rate),
+            'max_peers': self.max_peers,
             'peer_id': self.peer_id.hex(),
             'listen_port': self.listen_port
         }
+
+# For backward compatibility
+TorrentScheduler = BitfieldFixedTorrentScheduler

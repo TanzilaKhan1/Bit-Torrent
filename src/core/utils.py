@@ -1,3 +1,7 @@
+#Bit-Torrent/src/core/utils.py
+
+
+
 import asyncio
 import logging
 import socket
@@ -68,6 +72,10 @@ def compact_peers(peers: List[Tuple[str, int]]) -> bytes:
             port_bytes = struct.pack('>H', port)
             result += ip_bytes + port_bytes
     return result
+
+def format_compact_peers(peers: List[Tuple[str, int]]) -> bytes:
+    """Format peer list in compact format (alias for compact_peers)."""
+    return compact_peers(peers)
 
 def parse_url(url: str) -> Optional[Tuple[str, str, int, str]]:
     """Parse URL into components (scheme, host, port, path)."""

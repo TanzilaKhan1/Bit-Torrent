@@ -1,352 +1,142 @@
 #!/usr/bin/env python3
+
+#Bit-Torrent/main.py
+
 """
-BitTorrent Client - Main Application
+FINAL FIXED: BitTorrent Client with Working Piece Transfer
+=========================================================
 
-A complete BitTorrent client implementation with support for:
-- .torrent file parsing and creation
-- HTTP/UDP tracker communication
-- DHT peer discovery
-- Peer-to-peer communication
-- Piece downloading and validation
-- File storage management
-- Multi-torrent scheduling
-
-Usage:
-    python main.py add <torrent_file>
-    python main.py magnet <magnet_uri>
-    python main.py list
-    python main.py stats
-    python main.py daemon
+All components now properly fixed for actual file transfer.
 """
 
 import asyncio
 import argparse
 import sys
 import signal
-import json
 from pathlib import Path
 from typing import Optional
 
 from src.core.scheduler import TorrentScheduler
-from src.core.dht import DHT
-from src.core.utils import get_logger, format_bytes, format_speed
+from src.core.peer_server import PeerServer
+from src.core.local_tracker import LocalTracker
+from src.core.cli_visualizer import CLIVisualizer, TorrentVisualInfo, PeerVisualInfo
+from src.core.utils import get_logger
+from src.core.bit_torrent_peer import FinalFixedBitTorrentPeer
+
 
 logger = get_logger(__name__)
 
-class BitTorrentClient:
-    """Main BitTorrent client application."""
-    
-    def __init__(self, download_dir: str = "./downloads", listen_port: int = 6881):
-        self.download_dir = Path(download_dir)
-        self.listen_port = listen_port
-        
-        # Core components
-        self.scheduler = TorrentScheduler(str(self.download_dir), listen_port)
-        self.dht = DHT(port=listen_port + 1)  # DHT on port+1
-        
-        # State
-        self.running = False
-        self.shutdown_event = asyncio.Event()
-        
-        # Create download directory
-        self.download_dir.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"BitTorrent client initialized")
-        logger.info(f"Download directory: {self.download_dir}")
-        logger.info(f"Listen port: {self.listen_port}")
-    
-    async def start(self):
-        """Start the BitTorrent client."""
-        if self.running:
-            return
-        
-        logger.info("Starting BitTorrent client...")
-        
-        try:
-            # Start DHT
-            await self.dht.start()
-            
-            # Start scheduler
-            await self.scheduler.start()
-            
-            self.running = True
-            logger.info("BitTorrent client started successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to start BitTorrent client: {e}")
-            await self.stop()
-            raise
-    
-    async def stop(self):
-        """Stop the BitTorrent client."""
-        if not self.running:
-            return
-        
-        logger.info("Stopping BitTorrent client...")
-        
-        self.running = False
-        self.shutdown_event.set()
-        
-        # Stop components
-        await self.scheduler.stop()
-        await self.dht.stop()
-        
-        logger.info("BitTorrent client stopped")
-    
-    async def add_torrent_file(self, torrent_path: str) -> bool:
-        """Add a torrent from a .torrent file."""
-        if not self.running:
-            logger.error("Client not running")
-            return False
-        
-        torrent_file = Path(torrent_path)
-        if not torrent_file.exists():
-            logger.error(f"Torrent file not found: {torrent_path}")
-            return False
-        
-        logger.info(f"Adding torrent file: {torrent_path}")
-        success = await self.scheduler.add_torrent_file(torrent_path)
-        
-        if success:
-            logger.info(f"Successfully added torrent: {torrent_path}")
-        else:
-            logger.error(f"Failed to add torrent: {torrent_path}")
-        
-        return success
-    
-    async def add_magnet_uri(self, magnet_uri: str) -> bool:
-        """Add a torrent from a magnet URI."""
-        if not self.running:
-            logger.error("Client not running")
-            return False
-        
-        logger.info(f"Adding magnet URI: {magnet_uri}")
-        success = await self.scheduler.add_magnet_uri(magnet_uri)
-        
-        if success:
-            logger.info(f"Successfully added magnet URI")
-        else:
-            logger.error(f"Failed to add magnet URI")
-        
-        return success
-    
-    def get_status(self) -> dict:
-        """Get client status."""
-        global_stats = self.scheduler.get_global_stats()
-        dht_stats = self.dht.get_stats()
-        
-        return {
-            'running': self.running,
-            'download_dir': str(self.download_dir),
-            'listen_port': self.listen_port,
-            'scheduler': global_stats,
-            'dht': dht_stats
-        }
-    
-    def get_torrents(self) -> list:
-        """Get list of active torrents."""
-        return self.scheduler.get_all_sessions()
-    
-    async def wait_for_shutdown(self):
-        """Wait for shutdown signal."""
-        await self.shutdown_event.wait()
 
-# Global client instance
-client = None
 
-async def run_daemon():
-    """Run the client in daemon mode."""
-    global client
+# Global instances
+tracker = None
+peer = None
+
+async def run_tracker(port: int = 8080):
+    """Run local tracker."""
+    global tracker
     
-    client = BitTorrentClient()
+    tracker = LocalTracker(port=port)
     
-    # Set up signal handlers
     def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, shutting down...")
-        asyncio.create_task(client.stop())
+        logger.info(f"Received signal {signum}, shutting down tracker...")
+        asyncio.create_task(tracker.stop())
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        await client.start()
+        await tracker.start()
+        print(f"🎯 FINAL FIXED: Tracker started on http://localhost:{port}")
+        print(f"📊 Stats: http://localhost:{port}/stats")
+        print("Press Ctrl+C to stop")
         
-        # Keep running until shutdown
-        while client.running:
+        while tracker.running:
             await asyncio.sleep(1)
             
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
     except Exception as e:
-        logger.error(f"Error in daemon mode: {e}")
+        logger.error(f"Error in tracker: {e}")
     finally:
-        await client.stop()
+        await tracker.stop()
 
-async def add_torrent_command(torrent_path: str):
-    """Add a torrent file."""
-    global client
+async def run_peer(port: int, download_dir: str, torrent_path: Optional[str] = None):
+    """Run a peer."""
+    global peer
     
-    client = BitTorrentClient()
+    peer = FinalFixedBitTorrentPeer(port, download_dir)
+    
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, shutting down peer...")
+        asyncio.create_task(peer.stop())
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     try:
-        await client.start()
-        success = await client.add_torrent_file(torrent_path)
+        await peer.start()
         
-        if success:
-            print(f"Successfully added torrent: {torrent_path}")
-            
-            # Show initial status
-            torrents = client.get_torrents()
-            if torrents:
-                torrent = torrents[-1]  # Latest added
-                print(f"Name: {torrent['name']}")
-                print(f"Size: {torrent['total_size']}")
-                print(f"State: {torrent['state']}")
-            
-            # Keep running for a while to show progress
-            for i in range(30):  # 30 seconds
-                await asyncio.sleep(1)
-                torrents = client.get_torrents()
-                if torrents:
-                    torrent = torrents[-1]
-                    print(f"\rProgress: {torrent['progress_percentage']:.1f}% "
-                          f"({torrent['download_rate']}) "
-                          f"Peers: {torrent['peers_connected']}", end='')
-                    
-                    if torrent['state'] == 'completed':
-                        print(f"\nDownload completed!")
-                        break
-            
-            print()  # New line
-        else:
-            print(f"Failed to add torrent: {torrent_path}")
-            sys.exit(1)
-            
+        # Add torrent if provided
+        if torrent_path:
+            await peer.add_torrent(torrent_path)
+        
+        print(f"🚀 FINAL FIXED: Peer started on port {port}")
+        print(f"📁 Download directory: {download_dir}")
+        if torrent_path:
+            print(f"📋 Torrent: {torrent_path}")
+        print("Press Ctrl+C to stop")
+        
+        await peer.wait_for_shutdown()
+        
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
     except Exception as e:
-        logger.error(f"Error adding torrent: {e}")
-        sys.exit(1)
+        logger.error(f"Error in peer: {e}")
     finally:
-        await client.stop()
+        await peer.stop()
 
-async def add_magnet_command(magnet_uri: str):
-    """Add a magnet URI."""
-    global client
-    
-    client = BitTorrentClient()
-    
+async def list_torrents(port: int):
+    """List torrents for a peer."""
     try:
-        await client.start()
-        success = await client.add_magnet_uri(magnet_uri)
-        
-        if success:
-            print(f"Successfully added magnet URI")
-        else:
-            print(f"Failed to add magnet URI")
-            sys.exit(1)
-            
-    except Exception as e:
-        logger.error(f"Error adding magnet URI: {e}")
-        sys.exit(1)
-    finally:
-        await client.stop()
-
-async def list_torrents_command():
-    """List active torrents."""
-    global client
-    
-    client = BitTorrentClient()
-    
-    try:
-        await client.start()
-        torrents = client.get_torrents()
-        
-        if not torrents:
-            print("No active torrents")
-        else:
-            print(f"{'Name':<40} {'Progress':<10} {'Size':<10} {'Rate':<10} {'Peers':<6} {'State':<12}")
-            print("-" * 100)
-            
-            for torrent in torrents:
-                name = torrent['name'][:37] + '...' if len(torrent['name']) > 40 else torrent['name']
-                progress = f"{torrent['progress_percentage']:.1f}%"
-                size = torrent['total_size']
-                rate = torrent['download_rate']
-                peers = torrent['peers_connected']
-                state = torrent['state']
-                
-                print(f"{name:<40} {progress:<10} {size:<10} {rate:<10} {peers:<6} {state:<12}")
-                
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            # This would connect to peer's HTTP interface if we had one
+            # For now, just show message
+            print(f"To list torrents for peer on port {port}:")
+            print("This requires the peer to expose an HTTP API")
+            print("Currently not implemented - check peer's CLI visualizer instead")
     except Exception as e:
         logger.error(f"Error listing torrents: {e}")
-        sys.exit(1)
-    finally:
-        await client.stop()
 
-async def show_stats_command():
-    """Show client statistics."""
-    global client
-    
-    client = BitTorrentClient()
-    
-    try:
-        await client.start()
-        status = client.get_status()
-        
-        print("BitTorrent Client Status")
-        print("=" * 40)
-        print(f"Running: {status['running']}")
-        print(f"Download Directory: {status['download_dir']}")
-        print(f"Listen Port: {status['listen_port']}")
-        print()
-        
-        print("Scheduler Statistics")
-        print("-" * 20)
-        scheduler_stats = status['scheduler']
-        print(f"Active Torrents: {scheduler_stats['active_torrents']}")
-        print(f"Total Download Rate: {scheduler_stats['total_download_rate']}")
-        print(f"Total Upload Rate: {scheduler_stats['total_upload_rate']}")
-        print(f"Max Concurrent Torrents: {scheduler_stats['max_concurrent_torrents']}")
-        print(f"Max Peers per Torrent: {scheduler_stats['max_peers_per_torrent']}")
-        print(f"Peer ID: {scheduler_stats['peer_id']}")
-        print()
-        
-        print("DHT Statistics")
-        print("-" * 14)
-        dht_stats = status['dht']
-        print(f"Node ID: {dht_stats['node_id']}")
-        print(f"Node Count: {dht_stats['node_count']}")
-        print(f"Pending Transactions: {dht_stats['pending_transactions']}")
-        print(f"Running: {dht_stats['running']}")
-        
-    except Exception as e:
-        logger.error(f"Error showing stats: {e}")
-        sys.exit(1)
-    finally:
-        await client.stop()
+async def run_recheck(port):
+    peer = FinalFixedBitTorrentPeer(port=port, download_dir=None, tracker_url=None)
+    await peer.recheck_seeded()
+    logger.info("Seeded files rechecked")
+
+
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='BitTorrent Client')
+    parser = argparse.ArgumentParser(description='FINAL FIXED: BitTorrent Client')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
-    # Add torrent command
-    add_parser = subparsers.add_parser('add', help='Add a torrent file')
-    add_parser.add_argument('torrent_file', help='Path to .torrent file')
+    # Tracker command
+    tracker_parser = subparsers.add_parser('tracker', help='Run tracker')
+    tracker_parser.add_argument('--port', type=int, default=8080, help='Tracker port')
     
-    # Add magnet command
-    magnet_parser = subparsers.add_parser('magnet', help='Add a magnet URI')
-    magnet_parser.add_argument('magnet_uri', help='Magnet URI')
+    # Peer command
+    peer_parser = subparsers.add_parser('peer', help='Run peer')
+    peer_parser.add_argument('--port', type=int, required=True, help='Peer port')
+    peer_parser.add_argument('--download-dir', required=True, help='Download directory')
+    peer_parser.add_argument('--torrent', help='Torrent file to add automatically')
     
-    # List torrents command
-    subparsers.add_parser('list', help='List active torrents')
+    # List command
+    list_parser = subparsers.add_parser('list', help='List torrents')
+    list_parser.add_argument('--port', type=int, required=True, help='Peer port to query')
     
-    # Show stats command
-    subparsers.add_parser('stats', help='Show client statistics')
-    
-    # Daemon command
-    daemon_parser = subparsers.add_parser('daemon', help='Run in daemon mode')
-    daemon_parser.add_argument('--port', type=int, default=6881, help='Listen port')
-    daemon_parser.add_argument('--download-dir', default='./downloads', help='Download directory')
+    recheck_parser = subparsers.add_parser("recheck", help="Recheck seeded files")
+    recheck_parser.add_argument("--port", type=int, required=True, help="Peer port")
     
     args = parser.parse_args()
     
@@ -356,22 +146,22 @@ def main():
     
     # Run the appropriate command
     try:
-        if args.command == 'add':
-            asyncio.run(add_torrent_command(args.torrent_file))
-        elif args.command == 'magnet':
-            asyncio.run(add_magnet_command(args.magnet_uri))
+        if args.command == 'tracker':
+            print(f"🎯 FINAL FIXED: Starting tracker on port {args.port}")
+            asyncio.run(run_tracker(args.port))
+        elif args.command == "recheck":
+            asyncio.run(run_recheck(args.port))
+        elif args.command == 'peer':
+            print(f"🚀 FINAL FIXED: Starting peer on port {args.port}")
+            asyncio.run(run_peer(args.port, args.download_dir, args.torrent))
         elif args.command == 'list':
-            asyncio.run(list_torrents_command())
-        elif args.command == 'stats':
-            asyncio.run(show_stats_command())
-        elif args.command == 'daemon':
-            asyncio.run(run_daemon())
+            asyncio.run(list_torrents(args.port))
         else:
             parser.print_help()
             sys.exit(1)
             
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user")
+        print("\n✅ FINAL FIXED: Operation cancelled by user")
         sys.exit(0)
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
