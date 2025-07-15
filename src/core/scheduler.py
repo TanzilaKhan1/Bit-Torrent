@@ -415,6 +415,48 @@ class SimplifiedTorrentScheduler:
             except Exception as e:
                 logger.error(f"Error in stats loop: {e}")
                 await asyncio.sleep(2.0)
+                
+
+    def get_peer_connection_details(self):
+        """Get detailed peer connection information."""
+        peer_details = {}
+        
+        for info_hash, session in self.sessions.items():
+            peer_details[info_hash.hex()] = {
+                'session_stats': session.get_stats(),
+                'peer_connections': {}
+            }
+            
+            for peer_id, peer_conn in session.peer_connections.items():
+                peer_details[info_hash.hex()]['peer_connections'][peer_id] = {
+                    'host': peer_conn.host,
+                    'port': peer_conn.port,
+                    'connected': peer_conn.connected,
+                    'status': self._determine_peer_status(peer_conn),
+                    'bytes_downloaded': peer_conn.bytes_downloaded,
+                    'bytes_uploaded': peer_conn.bytes_uploaded,
+                    'peer_pieces': len(peer_conn.peer_pieces),
+                    'available_pieces': len(peer_conn.available_pieces),
+                    'downloading_from': list(peer_conn.downloading_from) if hasattr(peer_conn, 'downloading_from') else [],
+                    'uploading_to': list(peer_conn.uploading_to) if hasattr(peer_conn, 'uploading_to') else []
+                }
+        
+        return peer_details
+
+    def _determine_peer_status(self, peer_conn):
+        """Determine peer connection status."""
+        if not peer_conn.connected:
+            return "disconnected"
+        elif not peer_conn.handshake_complete:
+            return "connecting"
+        elif peer_conn.am_interested and not peer_conn.peer_choking:
+            return "downloading"
+        elif peer_conn.peer_interested and not peer_conn.am_choking:
+            return "uploading"
+        elif len(peer_conn.available_pieces) > 0:
+            return "seeding"
+        else:
+            return "connected"
     
     async def _announce_loop(self):
         """Periodic announce loop."""

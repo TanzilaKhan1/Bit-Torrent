@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
- BitTorrent Client - Main Entry Point
+ BitTorrent Client - Main Entry Point (FIXED IMPORTS)
 """
 
 import asyncio
@@ -38,6 +38,10 @@ class BitTorrentApplication:
         self.event_loop = None
         self.loop_thread = None
         
+        # Add visualizer data provider
+        self.data_provider = None
+        self.visualizer_enabled = False
+        
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
         def signal_handler(signum, frame):
@@ -59,7 +63,51 @@ class BitTorrentApplication:
         # Wait for loop to start
         while not self.event_loop:
             time.sleep(0.1)
-    
+            
+    def enable_visualizer(self, api_port=8081):
+        """Enable the network visualizer."""
+        try:
+            # Import here to avoid circular imports
+            from tracker_data import EnhancedTrackerDataProvider
+            
+            self.data_provider = EnhancedTrackerDataProvider(
+                tracker_port=8080,  # Your tracker port
+                api_port=api_port
+            )
+            
+            # Set component references
+            self.data_provider.set_components(
+                tracker=self.tracker,
+                scheduler=self.scheduler,
+                peer_server=self.peer_server
+            )
+            
+            # Start the data provider API
+            def start_provider():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self.data_provider.start())
+                    loop.run_forever()
+                except Exception as e:
+                    logger.error(f"Data provider error: {e}")
+                finally:
+                    loop.close()
+            
+            provider_thread = threading.Thread(target=start_provider, daemon=True)
+            provider_thread.start()
+            
+            self.visualizer_enabled = True
+            print(f"✓ Network visualizer API started on port {api_port}")
+            print(f"  Launch visualizer with: python enhanced_tracker_visualizer.py")
+            print(f"  Web interface: http://localhost:{api_port}/")
+            
+        except ImportError as e:
+            print(f"Could not import visualizer components: {e}")
+            print("Make sure tracker_data_provider.py is in the current directory")
+        except Exception as e:
+            print(f"Failed to enable visualizer: {e}")
+            
     def _run_event_loop(self):
         """Run the async event loop."""
         try:
@@ -77,7 +125,7 @@ class BitTorrentApplication:
         future = asyncio.run_coroutine_threadsafe(coro, self.event_loop)
         return future
     
-    def setup_gui(self, port: int, download_dir: str):
+    def setup_gui(self, port: int, download_dir: str, enable_visualizer=bool, visualizer_port=int):
         """Setup GUI interface."""
         try:
             from PyQt6.QtWidgets import QApplication
@@ -100,6 +148,10 @@ class BitTorrentApplication:
             
             # Setup GUI with components
             self.gui_window.setup_components(self.scheduler, self.peer_server)
+            
+            # Enable visualizer if not already enabled
+            if enable_visualizer and not self.visualizer_enabled:
+                self.enable_visualizer(visualizer_port)
             
             self.gui_mode = True
             logger.info("GUI setup complete")
@@ -134,11 +186,11 @@ class BitTorrentApplication:
             logger.error(f"Error setting up components: {e}")
             raise
     
-    def run_gui(self, port: int, download_dir: str, torrent_path: Optional[str] = None):
+    def run_gui(self, port, download_dir, torrent_path=None,
+                enable_visualizer=False, visualizer_port=8081):        
         """Run GUI application."""
         try:
-            self.setup_signal_handlers()
-            self.setup_gui(port, download_dir)
+            self.setup_gui(port, download_dir, enable_visualizer, visualizer_port)
             
             # Add initial torrent if provided
             if torrent_path:
@@ -156,33 +208,6 @@ class BitTorrentApplication:
         finally:
             self.stop()
     
-    async def run_cli(self, port: int, download_dir: str, torrent_path: Optional[str] = None):
-        """Run CLI application."""
-        try:
-            self.setup_signal_handlers()
-            
-            # Setup components
-            await self._setup_components(port, download_dir)
-            
-            # Add initial torrent if provided
-            if torrent_path:
-                success = await self.scheduler.add_torrent_file(torrent_path)
-                if success:
-                    logger.info(f"Added torrent: {torrent_path}")
-                else:
-                    logger.error(f"Failed to add torrent: {torrent_path}")
-            
-            # Keep running
-            self.running = True
-            while self.running:
-                await asyncio.sleep(1)
-                
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received")
-        except Exception as e:
-            logger.error(f"Error running CLI: {e}")
-        finally:
-            await self.stop_async()
     
     def add_torrent_async(self, torrent_path: str):
         """Add torrent asynchronously."""
@@ -309,6 +334,12 @@ class BitTorrentApplication:
         """Stop async components."""
         self.running = False
         
+        if self.data_provider:
+            try:
+                await self.data_provider.stop()
+            except Exception as e:
+                logger.error(f"Error stopping data provider: {e}")
+        
         if self.scheduler:
             await self.scheduler.stop()
             
@@ -356,7 +387,7 @@ async def run_tracker(port: int = 8080):
 
 
 def main():
-    """Main entry point."""
+    """Main entry point with visualizer support."""
     parser = argparse.ArgumentParser(description='BitTorrent Client')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
@@ -369,7 +400,10 @@ def main():
     peer_parser.add_argument('--port', type=int, required=True, help='Peer port')
     peer_parser.add_argument('--download-dir', required=True, help='Download directory')
     peer_parser.add_argument('--torrent', help='Torrent file to add automatically')
-    peer_parser.add_argument('--cli', action='store_true', help='Use CLI interface')
+    peer_parser.add_argument('--enable-visualizer', action='store_true', 
+                           help='Enable network visualizer')
+    peer_parser.add_argument('--visualizer-port', type=int, default=8081,
+                           help='Visualizer API port')
     
     args = parser.parse_args()
     
@@ -384,12 +418,16 @@ def main():
             print(f"🎯 Starting tracker on port {args.port}")
             asyncio.run(run_tracker(args.port))
         elif args.command == 'peer':
-            if args.cli:
-                print(f"🖥️  Starting peer with CLI on port {args.port}")
-                asyncio.run(app.run_cli(args.port, args.download_dir, args.torrent))
-            else:
-                print(f"🚀 Starting peer with GUI on port {args.port}")
-                sys.exit(app.run_gui(args.port, args.download_dir, args.torrent))
+            print(f"🚀 Starting peer with GUI on port {args.port}")
+            sys.exit(
+                app.run_gui(
+                    port=args.port,
+                    download_dir=args.download_dir,
+                    torrent_path=args.torrent,
+                    enable_visualizer=args.enable_visualizer,
+                    visualizer_port=args.visualizer_port,
+                )
+            )
         else:
             parser.print_help()
             sys.exit(1)

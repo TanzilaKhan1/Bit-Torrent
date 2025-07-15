@@ -121,6 +121,9 @@ class BitfieldFixedPeerConnection:
         self.keep_alive_interval = 120
         self.keep_alive_task = None
         
+        self.downloading_from: set[str] = set()
+        self.uploading_to:     set[str] = set()
+        self.connection_start_time = time.time()
         # Message processing
         self.message_queue = asyncio.Queue()
         self.processing_messages = False
@@ -610,6 +613,7 @@ class BitfieldFixedPeerConnection:
                 if piece_data:
                     await self.send_piece(piece_index, block_offset, piece_data)
                     logger.info(f"📤 Sent piece {piece_index} block to {self.host}:{self.port} ({len(piece_data)} bytes)")
+                    self.uploading_to.add(f"{self.host}:{self.port}")
                 else:
                     logger.warning(f"⚠️  Failed to read piece {piece_index}")
         except Exception as e:
@@ -708,6 +712,7 @@ class BitfieldFixedPeerConnection:
             
             logger.info(f"📤 Requested piece {piece_index} block {block_offset} ({block_length} bytes) from {self.host}:{self.port}")
             logger.debug(f"   📊 Pending requests: {len(self.pending_requests)}/{self.max_pending_requests}")
+            self.downloading_from.add(f"{self.host}:{self.port}")
             return True
         else:
             logger.error(f"❌ Failed to send request message to {self.host}:{self.port}")
