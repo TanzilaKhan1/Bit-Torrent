@@ -3,14 +3,8 @@
 #Bit-Torrent/src/core/peer_connection.py
 
 """
-BITFIELD FIX: Peer Connection with Proper Bitfield Transmission
-==============================================================
+ Peer Connection with Proper Bitfield Transmission
 
-Key fixes:
-1. Ensure bitfield is sent immediately after handshake
-2. Fix timing issues in post-handshake initialization
-3. Add better error handling and logging
-4. Ensure proper message ordering
 """
 
 import asyncio
@@ -103,6 +97,24 @@ class BitfieldFixedPeerConnection:
         self.bytes_downloaded = 0
         self.bytes_uploaded = 0
         self.last_activity = time.time()
+        self.last_received_data = time.time()
+        
+        # ENHANCED: Connection health monitoring
+        self.connection_healthy = True
+        self.failed_requests = 0
+        self.max_failed_requests = 5
+        self.health_check_task = None
+        self.connection_errors = 0
+        self.last_error_time = 0.0
+        
+        # Choking algorithm state
+        self.upload_rate = 0.0
+        self.download_rate = 0.0
+        self.last_rate_update = time.time()
+        self.upload_history = []
+        self.download_history = []
+        self.choking_decision_time = 0.0
+        self.unchoke_slots = 4  # Standard number of unchoke slots
         
         # Configuration
         self.block_size = 16384  # 16KB blocks
@@ -157,6 +169,9 @@ class BitfieldFixedPeerConnection:
                 
                 # Start keep-alive task
                 self.keep_alive_task = asyncio.create_task(self._keep_alive_loop())
+                
+                # ENHANCED: Start health monitoring
+                self.health_check_task = asyncio.create_task(self._health_monitoring_loop())
                 
                 logger.info(f"✅ Connection established, ready for message processing")
                 return True
@@ -468,6 +483,14 @@ class BitfieldFixedPeerConnection:
                 
         except Exception as e:
             logger.error(f"❌ Error sending {message_type.name} to {self.host}:{self.port}: {e}")
+            
+            # ENHANCED: Track connection errors
+            self.connection_errors += 1
+            self.last_error_time = time.time()
+            
+            if message_type == MessageType.REQUEST:
+                self.failed_requests += 1
+            
             await self.disconnect()
             return False
     
@@ -491,9 +514,13 @@ class BitfieldFixedPeerConnection:
         self.peer_interested = True
         logger.info(f"🎯 Peer {self.host}:{self.port} is interested in our pieces")
         
-        # Auto-unchoke interested peers
-        await self.send_unchoke()
-        logger.info(f"🔓 Auto-unchoked {self.host}:{self.port}")
+        # IMMEDIATE FIX: Auto-unchoke interested peers for testing
+        if self.peer_interested and self.am_choking:
+            logger.info(f"🔓 Auto-unchoking interested peer {self.host}:{self.port}")
+            await self.send_unchoke()
+            self.am_choking = False
+        
+        logger.info(f"📊 Peer {self.host}:{self.port} is interested and unchoked")
     
     async def _handle_not_interested(self, payload: bytes):
         """Handle not interested message."""
@@ -722,6 +749,51 @@ class BitfieldFixedPeerConnection:
         except Exception as e:
             logger.error(f"❌ Error in keep-alive loop for {self.host}:{self.port}: {e}")
     
+    async def _health_monitoring_loop(self):
+        """ENHANCED: Monitor connection health and detect issues."""
+        try:
+            while self.connected:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                
+                current_time = time.time()
+                
+                # Check if connection is stale
+                time_since_activity = current_time - self.last_activity
+                if time_since_activity > 300:  # 5 minutes
+                    logger.warning(f"⚠️  Connection stale to {self.host}:{self.port} ({time_since_activity:.1f}s)")
+                    self.connection_healthy = False
+                    await self.disconnect()
+                    break
+                
+                # Check failed requests
+                if self.failed_requests > self.max_failed_requests:
+                    logger.warning(f"⚠️  Too many failed requests to {self.host}:{self.port} ({self.failed_requests})")
+                    self.connection_healthy = False
+                    await self.disconnect()
+                    break
+                
+                # Check connection errors
+                if self.connection_errors > 10:  # Too many errors
+                    logger.warning(f"⚠️  Too many connection errors to {self.host}:{self.port} ({self.connection_errors})")
+                    self.connection_healthy = False
+                    await self.disconnect()
+                    break
+                
+                # Reset failed requests periodically if connection is healthy
+                if time_since_activity < 60:  # Active in last minute
+                    self.failed_requests = max(0, self.failed_requests - 1)
+                    self.connection_errors = max(0, self.connection_errors - 1)
+                
+                # Log health status periodically
+                if current_time - self.last_error_time > 300:  # Every 5 minutes
+                    logger.debug(f"💓 Health check for {self.host}:{self.port}: "
+                               f"errors={self.connection_errors}, failed_requests={self.failed_requests}")
+                    
+        except asyncio.CancelledError:
+            logger.debug(f"Health monitoring cancelled for {self.host}:{self.port}")
+        except Exception as e:
+            logger.error(f"❌ Error in health monitoring for {self.host}:{self.port}: {e}")
+    
     # Utility methods
     def has_piece(self, piece_index: int) -> bool:
         """Check if peer has a piece."""
@@ -736,9 +808,9 @@ class BitfieldFixedPeerConnection:
         return self.connected and not self.am_choking and self.peer_interested
     
     def set_available_pieces(self, pieces: set):
-        """BITFIELD FIX: Set available pieces with validation."""
+        """ Set available pieces with validation."""
         self.available_pieces = pieces.copy()
-        logger.debug(f"🔧 BITFIELD FIX: Set available pieces for {self.host}:{self.port}: {len(pieces)} pieces")
+        logger.debug(f" Set available pieces for {self.host}:{self.port}: {len(pieces)} pieces")
         logger.debug(f"   Pieces: {sorted(list(pieces))}")
     
     def get_available_pieces(self) -> set:
@@ -749,7 +821,7 @@ class BitfieldFixedPeerConnection:
     def set_needed_pieces(self, pieces: set):
         """Set the pieces this peer needs."""
         self.need_pieces = pieces.copy()
-        logger.debug(f"🔧 Set needed pieces for {self.host}:{self.port}: {len(pieces)} pieces")
+        logger.debug(f" Set needed pieces for {self.host}:{self.port}: {len(pieces)} pieces")
     
     def get_stats(self) -> Tuple[int, int, int]:
         """Get connection statistics."""
@@ -764,6 +836,11 @@ class BitfieldFixedPeerConnection:
         if self.keep_alive_task:
             self.keep_alive_task.cancel()
             self.keep_alive_task = None
+        
+        # ENHANCED: Cancel health monitoring task
+        if self.health_check_task:
+            self.health_check_task.cancel()
+            self.health_check_task = None
         
         if self.writer:
             try:
@@ -783,5 +860,4 @@ class BitfieldFixedPeerConnection:
         bitfield_status = f"bitfield_sent:{self.bitfield_sent},received:{self.bitfield_received}"
         return f"BitfieldFixedPeer({self.host}:{self.port}, {status}, {choke_status}, pieces:{len(self.peer_pieces)}, {bitfield_status})"
 
-# For backward compatibility
 PeerConnection = BitfieldFixedPeerConnection
