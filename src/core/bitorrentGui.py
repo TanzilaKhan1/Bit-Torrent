@@ -47,8 +47,20 @@ class StatsUpdateThread(QThread):
                     # Get stats from scheduler
                     stats = self.app.scheduler.get_all_stats()
                     self.stats_updated.emit(stats)
-                
-                self.msleep(1000)  # Update every second
+                    
+                    # PROGRESS UPDATE FIX: Update more frequently during active downloads
+                    update_interval = 1000  # Default 1 second
+                    
+                    # Check if any torrent is actively downloading
+                    for stat in stats:
+                        if (stat.get('state') == 'downloading' and 
+                            stat.get('download_rate', 0) > 0):
+                            update_interval = 500  # 0.5 seconds for active downloads
+                            break
+                    
+                    self.msleep(update_interval)
+                else:
+                    self.msleep(1000)  # Default if no scheduler
                 
             except Exception as e:
                 logger.error(f"Error in stats update thread: {e}")

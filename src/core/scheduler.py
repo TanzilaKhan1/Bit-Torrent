@@ -186,6 +186,16 @@ class SimplifiedTorrentScheduler:
                 port=self.listen_port
             )
             
+            # PROGRESS UPDATE FIX: Set up immediate progress update callback AFTER session creation
+            def update_session_stats():
+                """Immediately update session statistics."""
+                session.total_downloaded = storage.get_downloaded_bytes()
+                if session.piece_manager.is_complete() and session.state == TorrentState.DOWNLOADING:
+                    session.state = TorrentState.SEEDING
+                    logger.info(f"Download completed: {session.metadata.name}")
+            
+            piece_manager.on_progress_update = update_session_stats
+            
             # Initialize statistics
             session.total_downloaded = storage.get_downloaded_bytes()
             
@@ -211,7 +221,8 @@ class SimplifiedTorrentScheduler:
                     'name': session.metadata.name,
                     'peer_id': session.peer_id,
                     'piece_manager': session.piece_manager,
-                    'storage': session.storage
+                    'storage': session.storage,
+                    'session': session  # PEER COUNT FIX: Add session reference for peer tracking
                 }
                 self.peer_server.add_torrent_session(session.info_hash, session_info)
             
