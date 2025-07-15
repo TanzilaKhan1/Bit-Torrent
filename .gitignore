@@ -10,3 +10,4 @@ wheels/
 .specstory
 # Virtual environments
 .venv
+.DS_Store

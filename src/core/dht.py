@@ -170,11 +170,34 @@ class DHT:
         # Rate limiting
         self.rate_limiter = RateLimiter(max_operations=100, time_window=60.0)
         
-        # Bootstrap nodes (BitTorrent mainline DHT)
+
+        # ENHANCED: Updated bootstrap nodes with reliable 2024 nodes
         self.bootstrap_nodes = [
+            # Reliable mainline DHT bootstrap nodes (2024)
             ('router.bittorrent.com', 6881),
             ('dht.transmissionbt.com', 6881),
             ('router.utorrent.com', 6881),
+            ('dht.anacrolix.link', 42069),
+            ('dht.aelitis.com', 6881),
+            ('dht.libtorrent.org', 25401),
+            
+            # Public bootstrap nodes
+            ('bootstrap.jami.net', 4222),
+            ('bootstrap.ring.cx', 4222),
+            
+            # Fallback nodes (known good IPs)
+            ('87.98.162.88', 6881),
+            ('54.39.98.124', 6881),
+            ('144.76.60.215', 6881),
+            ('212.129.33.50', 6881),
+            ('91.121.59.153', 6881),
+            ('51.15.55.204', 6881),
+            ('95.211.168.85', 6881),
+            
+            # Additional reliable nodes
+            ('185.181.60.67', 6881),
+            ('89.234.156.205', 6881),
+            ('45.79.112.203', 6881),
         ]
         
         # Maintenance
@@ -247,24 +270,115 @@ class DHT:
         logger.info("DHT stopped")
     
     async def _bootstrap(self):
-        """Bootstrap the DHT by connecting to known nodes."""
-        logger.info("Bootstrapping DHT...")
+        """ENHANCED: Bootstrap the DHT by connecting to known nodes with better logic."""
+        logger.info("ENHANCED: Bootstrapping DHT...")
         
-        # Try to connect to bootstrap nodes
-        for host, port in self.bootstrap_nodes:
+        successful_pings = 0
+        tried_nodes = 0
+        
+        # Shuffle nodes for better distribution
+        import random
+        nodes = self.bootstrap_nodes.copy()
+        random.shuffle(nodes)
+        
+        # Try to connect to bootstrap nodes with improved retry logic
+        for host, port in nodes:
+            tried_nodes += 1
+            
             try:
-                await self._ping_node(host, port)
-                await asyncio.sleep(0.1)  # Small delay between requests
+                # Try to resolve and ping with retry
+                if await self._ping_node_with_retry(host, port):
+                    successful_pings += 1
+                    logger.info(f"✅ Bootstrap node {host}:{port} responded")
+                    
+                    # If we have enough nodes, start finding more
+                    if successful_pings >= 3:
+                        break
+                else:
+                    logger.debug(f"❌ Bootstrap node {host}:{port} failed to respond")
+                    
             except Exception as e:
-                logger.warning(f"Failed to ping bootstrap node {host}:{port}: {e}")
+                logger.debug(f"Bootstrap node {host}:{port} error: {e}")
+            
+            # Small delay between attempts
+            await asyncio.sleep(0.1)
         
-        # Find nodes close to our own ID
-        try:
-            await self._find_nodes(self.node_id)
-        except Exception as e:
-            logger.warning(f"Failed to find nodes during bootstrap: {e}")
+        logger.info(f"Bootstrap: {successful_pings}/{tried_nodes} nodes responded")
         
-        logger.info(f"Bootstrap complete. Routing table has {self.routing_table.get_node_count()} nodes")
+        # If we got some nodes, try to expand our routing table
+        if self.routing_table.get_node_count() > 0:
+            # Find nodes close to random IDs to populate routing table
+            for i in range(3):
+                try:
+                    random_id = self._generate_node_id()
+                    await self._find_nodes(random_id)
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.debug(f"Failed to find nodes for random ID {i}: {e}")
+        
+        # If bootstrap failed completely, try alternative approach
+        if successful_pings == 0:
+            logger.warning("Bootstrap failed completely. Trying alternative bootstrap...")
+            await self._alternative_bootstrap()
+        
+        final_node_count = self.routing_table.get_node_count()
+        logger.info(f"✅ Bootstrap complete. Routing table has {final_node_count} nodes")
+        
+        if final_node_count == 0:
+            logger.warning("⚠️  DHT bootstrap failed - no nodes in routing table")
+        else:
+            logger.info(f"🎉 DHT bootstrap successful with {final_node_count} nodes")
+    
+    async def _ping_node_with_retry(self, host: str, port: int, max_retries: int = 2) -> bool:
+        """ENHANCED: Ping node with retry logic."""
+        for attempt in range(max_retries + 1):
+            try:
+                if await self._ping_node(host, port):
+                    return True
+            except Exception as e:
+                logger.debug(f"Ping attempt {attempt + 1} to {host}:{port} failed: {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))  # Increasing delay
+                else:
+                    raise
+        return False
+        
+    async def _alternative_bootstrap(self):
+        """ENHANCED: Alternative bootstrap method when primary fails."""
+        logger.info("Trying alternative bootstrap methods...")
+        
+        # Try well-known IPs directly (no DNS resolution)
+        direct_ips = [
+            ('87.98.162.88', 6881),
+            ('54.39.98.124', 6881),
+            ('144.76.60.215', 6881),
+            ('212.129.33.50', 6881),
+        ]
+        
+        for ip, port in direct_ips:
+            try:
+                if await self._ping_node_with_retry(ip, port, max_retries=1):
+                    logger.info(f"✅ Alternative bootstrap succeeded: {ip}:{port}")
+                    return
+            except Exception as e:
+                logger.debug(f"Alternative bootstrap failed for {ip}: {e}")
+        
+        dns_nodes = [
+            ('router.bittorrent.com', 6881),
+            ('dht.transmissionbt.com', 6881),
+        ]
+        
+        for host, port in dns_nodes:
+            try:
+                import socket
+                ip = socket.gethostbyname(host)
+                if await self._ping_node_with_retry(ip, port, max_retries=1):
+                    logger.info(f"✅ DNS bootstrap succeeded: {host} ({ip}:{port})")
+                    return
+            except Exception as e:
+                logger.debug(f"DNS bootstrap failed for {host}: {e}")
+        
+        logger.warning("⚠️  All alternative bootstrap methods failed")
     
     async def _message_handler(self):
         """Handle incoming DHT messages."""

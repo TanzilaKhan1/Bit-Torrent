@@ -2,14 +2,6 @@
 
 #Bit-Torrent/src/core/storage.py
 
-
-"""
-FIXED: Storage System with Synchronous Initialization
-====================================================
-
-Key Fix: Make storage initialization synchronous to prevent race conditions
-"""
-
 import os
 import asyncio
 import hashlib
@@ -253,6 +245,66 @@ class FixedTorrentStorage:
         except Exception as e:
             logger.error(f"❌ Failed to read piece {piece_index}: {e}")
             return None
+    
+    # In storage.py, add these methods to TorrentStorage class:
+
+    async def get_file_progress(self, file_index: int) -> float:
+        """Get download progress for a specific file."""
+        if not self.metadata.files or file_index >= len(self.metadata.files):
+            return 0.0
+        
+        file_info = self.metadata.files[file_index]
+        file_pieces = self._get_file_pieces(file_index)
+        
+        completed_pieces = sum(1 for p in file_pieces if p in self.verified_pieces)
+        total_pieces = len(file_pieces)
+        
+        return completed_pieces / total_pieces if total_pieces > 0 else 0.0
+
+    def _get_file_pieces(self, file_index: int) -> List[int]:
+        """Get piece indices that contain data for a specific file."""
+        if not self.metadata.files:
+            return list(range(len(self.metadata.pieces_hash_list)))
+        
+        file_info = self.metadata.files[file_index]
+        file_offset = sum(f['length'] for f in self.metadata.files[:file_index])
+        file_length = file_info['length']
+        
+        start_piece = file_offset // self.metadata.piece_length
+        end_offset = file_offset + file_length
+        end_piece = (end_offset - 1) // self.metadata.piece_length
+        
+        return list(range(start_piece, end_piece + 1))
+
+    async def delete_files(self):
+        """Delete all downloaded files."""
+        if self.metadata.files:
+            # Multi-file torrent
+            for file_info in self.metadata.files:
+                file_path = os.path.join(self.download_dir, self.metadata.name, *file_info['path'])
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Deleted: {file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to delete {file_path}: {e}")
+            
+            # Try to remove directory
+            try:
+                dir_path = os.path.join(self.download_dir, self.metadata.name)
+                if os.path.exists(dir_path) and not os.listdir(dir_path):
+                    os.rmdir(dir_path)
+            except:
+                pass
+        else:
+            # Single file torrent
+            file_path = os.path.join(self.download_dir, self.metadata.name)
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Deleted: {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete {file_path}: {e}")
     
     async def _read_piece_from_files(self, piece_index: int) -> Optional[bytes]:
         """Read piece data from the appropriate files."""
