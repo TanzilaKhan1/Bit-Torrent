@@ -514,6 +514,15 @@ class BitTorrentMainWindow(QMainWindow):
         cursor.movePosition(cursor.MoveOperation.End)
         self.log_widget.setTextCursor(cursor)
     
+    def show_torrent_already_added_dialog(self):
+        """Show dialog for when torrent is already added."""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Torrent Already Added")
+        msg_box.setText("This torrent has already been added to the client.")
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
+    
     def closeEvent(self, event):
         """Handle window close event."""
         reply = QMessageBox.question(
