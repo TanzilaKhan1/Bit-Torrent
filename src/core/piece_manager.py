@@ -114,7 +114,7 @@ class SimplifiedPieceManager:
         self.download_manager_running = False
         self.download_manager_task = None
         
-        # RACE CONDITION FIX: Add event to wake up download manager
+        #  Add event to wake up download manager
         self.new_opportunity_event = asyncio.Event()
         
         # PROGRESS UPDATE FIX: Add callback for immediate progress updates
@@ -160,12 +160,12 @@ class SimplifiedPieceManager:
         
         logger.info(f"✅ Set up callbacks for peer {peer_id}")
         
-        # RACE CONDITION FIX: Always try to start download manager OR wake up existing one
+        #  Always try to start download manager OR wake up existing one
         if not self.download_manager_running and len(self.pending_pieces) > 0:
             logger.info(f"🚀 Starting download management for {len(self.pending_pieces)} pending pieces")
             self.download_manager_task = asyncio.create_task(self.manage_downloads())
         elif self.download_manager_running:
-            logger.info(f"🔔 RACE CONDITION FIX: Waking up existing download manager (new peer added)")
+            logger.info(f"🔔  Waking up existing download manager (new peer added)")
             self.new_opportunity_event.set()
     
     def remove_peer(self, peer_id: str):
@@ -239,7 +239,7 @@ class SimplifiedPieceManager:
                 logger.info(f"   🔒 Peer choking: {peer_info.connection.peer_choking}")
                 logger.info(f"   🎯 Am interested: {peer_info.connection.am_interested}")
                 
-                # RACE CONDITION FIX: Always try to start download manager OR wake up existing one
+                #  Always try to start download manager OR wake up existing one
                 if not self.download_manager_running and len(self.pending_pieces) > 0:
                     logger.info(f"🚀 PIECE_MANAGER: Starting download manager for {len(self.pending_pieces)} pending pieces")
                     self.download_manager_task = asyncio.create_task(self.manage_downloads())
@@ -280,12 +280,12 @@ class SimplifiedPieceManager:
         if peer_id in self.peers:
             self.peers[peer_id].is_connected = True
             
-            # RACE CONDITION FIX: Always try to start download manager OR wake up existing one
+            #  Always try to start download manager OR wake up existing one
             if not self.download_manager_running and len(self.pending_pieces) > 0:
                 logger.info(f"🚀 Starting download manager after unchoke from {peer_id}")
                 self.download_manager_task = asyncio.create_task(self.manage_downloads())
             elif self.download_manager_running:
-                logger.info(f"🔔 RACE CONDITION FIX: Waking up existing download manager (peer {peer_id} unchoked us)")
+                logger.info(f"🔔  Waking up existing download manager (peer {peer_id} unchoked us)")
                 self.new_opportunity_event.set()
     
     async def _complete_piece(self, piece_index: int):
@@ -338,9 +338,9 @@ class SimplifiedPieceManager:
         # Clean up
         del self.active_downloads[piece_index]
         
-        # RACE CONDITION FIX: Wake up download manager when piece completes (frees up download slot)
+        #  Wake up download manager when piece completes (frees up download slot)
         if self.download_manager_running and len(self.pending_pieces) > 0:
-            logger.info(f"🔔 RACE CONDITION FIX: Waking up download manager (piece {piece_index} completed, slot available)")
+            logger.info(f"🔔  Waking up download manager (piece {piece_index} completed, slot available)")
             self.new_opportunity_event.set()
     
     def get_next_piece_to_download(self) -> Optional[Tuple[int, str]]:
@@ -607,9 +607,9 @@ class SimplifiedPieceManager:
                 # Clean up timed out downloads
                 await self._cleanup_timed_out_downloads()
                 
-                # RACE CONDITION FIX: Smart waiting - if no downloads started, wait for new opportunities
+                #  Smart waiting - if no downloads started, wait for new opportunities
                 if not started_new_downloads and len(self.active_downloads) == 0:
-                    logger.info(f"⏳ RACE CONDITION FIX: No downloads active, waiting for new opportunities...")
+                    logger.info(f"⏳  No downloads active, waiting for new opportunities...")
                     
                     # Clear any previous event
                     self.new_opportunity_event.clear()
@@ -617,9 +617,9 @@ class SimplifiedPieceManager:
                     # Wait for either new opportunities or timeout
                     try:
                         await asyncio.wait_for(self.new_opportunity_event.wait(), timeout=10.0)
-                        logger.info(f"🔔 RACE CONDITION FIX: New opportunity detected, checking again...")
+                        logger.info(f"🔔  New opportunity detected, checking again...")
                     except asyncio.TimeoutError:
-                        logger.info(f"⏰ RACE CONDITION FIX: Timeout waiting for opportunities, continuing...")
+                        logger.info(f"⏰  Timeout waiting for opportunities, continuing...")
                 else:
                     # Normal operation - short sleep before next iteration
                     logger.info(f"⏱️  DOWNLOAD MANAGER: Sleeping for 2 seconds...")
@@ -647,9 +647,9 @@ class SimplifiedPieceManager:
                 self.pending_pieces.add(piece_index)
                 cleaned_up_count += 1
         
-        # RACE CONDITION FIX: Wake up download manager if we cleaned up timed-out downloads (frees up slots)
+        #  Wake up download manager if we cleaned up timed-out downloads (frees up slots)
         if cleaned_up_count > 0 and self.download_manager_running and len(self.pending_pieces) > 0:
-            logger.info(f"🔔 RACE CONDITION FIX: Waking up download manager ({cleaned_up_count} timed-out downloads cleaned up)")
+            logger.info(f"🔔  Waking up download manager ({cleaned_up_count} timed-out downloads cleaned up)")
             self.new_opportunity_event.set()
     
     def get_progress(self) -> Tuple[int, int, float]:
