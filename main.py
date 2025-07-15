@@ -221,6 +221,39 @@ class BitTorrentApplication:
                     if self.gui_window:
                         self.gui_window.log_message(f"Error adding torrent: {e}")
     
+    def remove_torrent_async(self, info_hash_hex: str):
+        """Remove torrent asynchronously."""
+        if not self.scheduler:
+            logger.error("Scheduler not available")
+            if self.gui_window:
+                self.gui_window.log_message("Error: Scheduler not available")
+            return
+        
+        try:
+            # Convert hex string to bytes
+            info_hash = bytes.fromhex(info_hash_hex)
+            
+            future = self.run_async_task(self.scheduler.remove_torrent(info_hash))
+            if future:
+                try:
+                    result = future.result(timeout=10)
+                    if result:
+                        logger.info(f"Successfully removed torrent: {info_hash_hex[:16]}...")
+                        if self.gui_window:
+                            self.gui_window.log_message(f"Successfully removed torrent")
+                    else:
+                        logger.error(f"Failed to remove torrent: {info_hash_hex[:16]}...")
+                        if self.gui_window:
+                            self.gui_window.log_message(f"Failed to remove torrent")
+                except Exception as e:
+                    logger.error(f"Error removing torrent: {e}")
+                    if self.gui_window:
+                        self.gui_window.log_message(f"Error removing torrent: {e}")
+        except Exception as e:
+            logger.error(f"Error processing torrent removal: {e}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Error processing torrent removal: {e}")
+    
     def add_seed_async(self, seed_path: str):
         """Add seed file asynchronously."""
         if not self.scheduler:

@@ -377,17 +377,40 @@ class BitTorrentMainWindow(QMainWindow):
             
         # Get the row of the first selected item
         current_row = selected_items[0].row()
+        
+        # Get the name and info_hash from the first column
+        name_item = self.torrent_table.item(current_row, 0)
+        if not name_item:
+            QMessageBox.warning(
+                self, "Error", 
+                "Could not get torrent information",
+                QMessageBox.StandardButton.Ok
+            )
+            return
+        
+        torrent_name = name_item.text()
+        info_hash_hex = name_item.data(Qt.ItemDataRole.UserRole)
+        
+        if not info_hash_hex:
+            QMessageBox.warning(
+                self, "Error", 
+                "Could not get torrent info_hash",
+                QMessageBox.StandardButton.Ok
+            )
+            return
+        
+        # Confirm removal
         reply = QMessageBox.question(
             self, "Confirm Remove", 
-            "Are you sure you want to remove this torrent?",
+            f"Are you sure you want to remove '{torrent_name}'?\n\n"
+            "This will stop downloading/seeding and remove it from the list.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
+        
         if reply == QMessageBox.StandardButton.Yes:
-            info_hash_item = self.torrent_table.item(current_row, 0)
-            if info_hash_item:
-                torrent_name = info_hash_item.text()
-                self.log_message(f"Removing torrent: {torrent_name}")
-                # TODO: Implement remove functionality
+            self.log_message(f"Removing torrent: {torrent_name}")
+            # Call the app's remove method
+            self.app.remove_torrent_async(info_hash_hex)
     
     def show_about(self):
         """Show about dialog."""
@@ -410,6 +433,8 @@ class BitTorrentMainWindow(QMainWindow):
             for row, stat in enumerate(stats):
                 # Name
                 name_item = QTableWidgetItem(stat.get('name', 'Unknown'))
+                # Store info_hash as user data for later retrieval
+                name_item.setData(Qt.ItemDataRole.UserRole, stat.get('info_hash'))
                 self.torrent_table.setItem(row, 0, name_item)
                 
                 # Size
