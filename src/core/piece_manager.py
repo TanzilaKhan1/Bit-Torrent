@@ -674,6 +674,10 @@ class SimplifiedPieceManager:
         """Check if all pieces are downloaded."""
         return len(self.pending_pieces) == 0 and len(self.active_downloads) == 0
     
+    def get_completed_count(self) -> int:
+        """Get the number of completed pieces."""
+        return len(self.completed_pieces)
+    
     async def shutdown(self):
         """Shutdown the piece manager."""
         self.download_manager_running = False

@@ -323,6 +323,36 @@ class BitfieldFixedPeerServer:
         else:
             logger.warning(f"   ⚠️  No piece manager in session info")
     
+# In peer_server.py, add:
+
+    async def get_connection_stats(self):
+        """Get current connection statistics."""
+        stats = {
+            'total_connections': len(self.active_connections),
+            'torrent_sessions': {},
+            'connection_details': []
+        }
+        
+        for info_hash, session_info in self.torrent_sessions.items():
+            stats['torrent_sessions'][info_hash.hex()] = {
+                'name': session_info['name'],
+                'active_connections': len([c for c in self.active_connections.values() 
+                                        if c.get('info_hash') == info_hash])
+            }
+        
+        # Add connection details
+        for conn_id, conn_info in self.active_connections.items():
+            if conn_info:
+                stats['connection_details'].append({
+                    'connection_id': conn_id,
+                    'peer_host': conn_info.get('peer_host', 'unknown'),
+                    'peer_port': conn_info.get('peer_port', 0),
+                    'info_hash': conn_info.get('info_hash', b'').hex(),
+                    'status': conn_info.get('status', 'unknown'),
+                    'connected_time': time.time() - conn_info.get('connect_time', time.time())
+                })
+        
+        return stats
     def remove_torrent_session(self, info_hash: bytes):
         """Remove a torrent session from the server."""
         if info_hash in self.active_torrents:
