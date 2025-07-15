@@ -135,6 +135,35 @@ class SimplifiedTorrentScheduler:
         
         logger.info("Simplified scheduler stopped")
     
+    async def remove_torrent(self, info_hash: bytes) -> bool:
+        """Remove a specific torrent by info_hash."""
+        try:
+            if info_hash not in self.sessions:
+                logger.warning(f"Torrent not found: {info_hash.hex()[:16]}...")
+                return False
+            
+            session = self.sessions[info_hash]
+            torrent_name = session.metadata.name
+            
+            logger.info(f"Removing torrent: {torrent_name}")
+            
+            # Stop the session
+            await self._stop_session(session)
+            
+            # Remove from peer server
+            if self.peer_server:
+                self.peer_server.remove_torrent_session(info_hash)
+            
+            # Remove from sessions
+            del self.sessions[info_hash]
+            
+            logger.info(f"Successfully removed torrent: {torrent_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing torrent: {e}")
+            return False
+    
     async def add_torrent_file(self, torrent_path: str) -> bool:
         """Add a torrent from file."""
         try:

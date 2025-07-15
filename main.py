@@ -232,7 +232,7 @@ class BitTorrentApplication:
                                 logger.info(f"⚠️  Torrent already added: {Path(torrent_path).name}")
                                 print("torrent already added")
                                 if self.gui_window:
-                                    self.gui_window.log_message("torrent already added")
+                                    self.gui_window.show_torrent_already_added_dialog()
                             else:
                                 logger.error(f"Failed to add torrent: {torrent_path}")
                                 if self.gui_window:
@@ -246,6 +246,39 @@ class BitTorrentApplication:
                     if self.gui_window:
                         self.gui_window.log_message(f"Error adding torrent: {e}")
     
+    def remove_torrent_async(self, info_hash_hex: str):
+        """Remove torrent asynchronously."""
+        if not self.scheduler:
+            logger.error("Scheduler not available")
+            if self.gui_window:
+                self.gui_window.log_message("Error: Scheduler not available")
+            return
+        
+        try:
+            # Convert hex string to bytes
+            info_hash = bytes.fromhex(info_hash_hex)
+            
+            future = self.run_async_task(self.scheduler.remove_torrent(info_hash))
+            if future:
+                try:
+                    result = future.result(timeout=10)
+                    if result:
+                        logger.info(f"Successfully removed torrent: {info_hash_hex[:16]}...")
+                        if self.gui_window:
+                            self.gui_window.log_message(f"Successfully removed torrent")
+                    else:
+                        logger.error(f"Failed to remove torrent: {info_hash_hex[:16]}...")
+                        if self.gui_window:
+                            self.gui_window.log_message(f"Failed to remove torrent")
+                except Exception as e:
+                    logger.error(f"Error removing torrent: {e}")
+                    if self.gui_window:
+                        self.gui_window.log_message(f"Error removing torrent: {e}")
+        except Exception as e:
+            logger.error(f"Error processing torrent removal: {e}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Error processing torrent removal: {e}")
+    
     def add_seed_async(self, seed_path: str):
         """Add seed file asynchronously."""
         if not self.scheduler:
@@ -256,6 +289,7 @@ class BitTorrentApplication:
         
         try:
             import os
+            import shutil
             from pathlib import Path
             from src.core.torrent_creator import create_torrent_from_path
             
@@ -286,7 +320,20 @@ class BitTorrentApplication:
             torrent_filename = f"{file_name}.torrent"
             torrent_path = torrents_dir / torrent_filename
             
-            # Create torrent file
+            # Check if .torrent file already exists
+            if torrent_path.exists():
+                logger.info(f"Found existing torrent file: {torrent_filename}")
+                if self.gui_window:
+                    self.gui_window.log_message(f"Found existing torrent file: {torrent_filename}")
+                
+                # Copy the actual file to downloaded folder if it's not there
+                self._copy_file_to_downloaded_if_needed(seed_path, file_name)
+                
+                # Add the existing torrent
+                self.add_torrent_async(str(torrent_path))
+                return
+            
+            # Create torrent file since it doesn't exist
             logger.info(f"Creating torrent for: {file_name}")
             if self.gui_window:
                 self.gui_window.log_message(f"Creating torrent for: {file_name}")
@@ -306,6 +353,9 @@ class BitTorrentApplication:
             logger.info(f"Created torrent: {torrent_filename}")
             if self.gui_window:
                 self.gui_window.log_message(f"Created torrent: {torrent_filename}")
+            
+            # Copy the actual file to downloaded folder if it's not there
+            self._copy_file_to_downloaded_if_needed(seed_path, file_name)
             
             # Now add the created torrent to the scheduler
             future = self.run_async_task(self.scheduler.add_torrent_file(str(torrent_path)))
@@ -329,6 +379,55 @@ class BitTorrentApplication:
             logger.error(f"Error processing seed file: {e}")
             if self.gui_window:
                 self.gui_window.log_message(f"Error processing seed file: {e}")
+    
+    def _copy_file_to_downloaded_if_needed(self, source_path: str, file_name: str):
+        """Copy the actual file to the downloaded folder if it's not already there."""
+        try:
+            import shutil
+            from pathlib import Path
+            
+            # Get the download directory from scheduler
+            if not self.scheduler:
+                return
+            
+            download_dir = Path(self.scheduler.download_dir)
+            destination_path = download_dir/ "downloaded" / file_name
+            
+            # Check if file already exists in downloaded folder
+            if destination_path.exists():
+                # Check if file sizes match
+                source_size = Path(source_path).stat().st_size
+                dest_size = destination_path.stat().st_size
+                
+                if source_size == dest_size:
+                    logger.info(f"File already exists in downloaded folder: {file_name}")
+                    if self.gui_window:
+                        self.gui_window.log_message(f"File already exists in downloaded folder: {file_name}")
+                    return
+                else:
+                    logger.info(f"File exists but size differs, replacing: {file_name}")
+                    if self.gui_window:
+                        self.gui_window.log_message(f"File exists but size differs, replacing: {file_name}")
+            
+            # Copy the file
+            logger.info(f"Copying file to downloaded folder: {file_name}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Copying file to downloaded folder: {file_name}")
+            
+            # Ensure download directory exists
+            download_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Copy the file
+            shutil.copy2(source_path, destination_path)
+            
+            logger.info(f"Successfully copied file: {source_path} -> {destination_path}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Successfully copied file to downloaded folder")
+                
+        except Exception as e:
+            logger.error(f"Error copying file to downloaded folder: {e}")
+            if self.gui_window:
+                self.gui_window.log_message(f"Error copying file to downloaded folder: {e}")
     
     async def stop_async(self):
         """Stop async components."""
@@ -399,11 +498,13 @@ def main():
     peer_parser = subparsers.add_parser('peer', help='Run peer')
     peer_parser.add_argument('--port', type=int, required=True, help='Peer port')
     peer_parser.add_argument('--download-dir', required=True, help='Download directory')
+
     peer_parser.add_argument('--torrent', help='Torrent file to add automatically')
     peer_parser.add_argument('--enable-visualizer', action='store_true', 
                            help='Enable network visualizer')
     peer_parser.add_argument('--visualizer-port', type=int, default=8081,
                            help='Visualizer API port')
+
     
     args = parser.parse_args()
     
@@ -428,6 +529,7 @@ def main():
                     visualizer_port=args.visualizer_port,
                 )
             )
+
         else:
             parser.print_help()
             sys.exit(1)
