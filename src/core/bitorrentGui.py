@@ -292,6 +292,9 @@ class BitTorrentMainWindow(QMainWindow):
         # Session tracking
         self.session_start_time = time.time()
         
+        # Rate calculation tracking - store previous values for each torrent
+        self.torrent_rate_data = {}  # {info_hash: {'last_down': int, 'last_up': int, 'last_calc': float}}
+        
         self.setup_ui()
         self.setup_menu_bar()
         self.setup_toolbar()
@@ -304,6 +307,194 @@ class BitTorrentMainWindow(QMainWindow):
         self.stats_thread.start()
         
         logger.info("GUI Main Window initialized")
+    
+    def calculate_torrent_rates(self):
+        """Calculate download and upload rates for each torrent session."""
+        if not self.scheduler:
+            return {}
+        
+        current_time = time.time()
+        calculated_rates = {}
+        
+        try:
+            for info_hash, session in self.scheduler.sessions.items():
+                info_hash_hex = info_hash.hex()
+                
+                # Get current totals from session
+                total_downloaded = getattr(session, 'total_downloaded', 0)
+                total_uploaded = getattr(session, 'total_uploaded', 0)
+                
+                # Get or initialize previous data for this torrent
+                if info_hash_hex not in self.torrent_rate_data:
+                    self.torrent_rate_data[info_hash_hex] = {
+                        'last_down': total_downloaded,
+                        'last_up': total_uploaded,
+                        'last_calc': current_time
+                    }
+                
+                prev_data = self.torrent_rate_data[info_hash_hex]
+                
+                # Calculate time difference
+                time_diff = max(1.0, current_time - prev_data['last_calc'])
+                
+                # Calculate rates (bytes per second)
+                download_rate = max(0, (total_downloaded - prev_data['last_down']) / time_diff)
+                upload_rate = max(0, (total_uploaded - prev_data['last_up']) / time_diff)
+                
+                # Store calculated rates
+                calculated_rates[info_hash_hex] = {
+                    'download_rate': download_rate,
+                    'upload_rate': upload_rate,
+                    'total_downloaded': total_downloaded,
+                    'total_uploaded': total_uploaded
+                }
+                
+                # Debug log for active transfers
+                if download_rate > 0 or upload_rate > 0:
+                    from src.core.utils import format_speed
+                    logger.debug(f"Torrent {info_hash_hex[:8]}: "
+                               f"↓{format_speed(download_rate)} ↑{format_speed(upload_rate)} "
+                               f"(Total: ↓{format_speed(total_downloaded)} ↑{format_speed(total_uploaded)})")
+                
+                # Update stored data for next calculation
+                prev_data['last_down'] = total_downloaded
+                prev_data['last_up'] = total_uploaded
+                prev_data['last_calc'] = current_time
+                
+        except Exception as e:
+            logger.error(f"Error calculating torrent rates: {e}")
+        
+        return calculated_rates
+    
+    def calculate_peer_rates_for_torrent(self, session):
+        """Calculate aggregate peer rates for a specific torrent session."""
+        total_download_rate = 0.0
+        total_upload_rate = 0.0
+        current_time = time.time()
+        
+        try:
+            # Aggregate rates from all peer connections for this session
+            for peer_id, peer_conn in session.peer_connections.items():
+                # Get connection statistics
+                try:
+                    down, up, pending = peer_conn.get_stats()
+                    
+                    # Calculate rates for this peer connection
+                    peer_key = f"{session.info_hash.hex()}_{peer_id}"
+                    
+                    if not hasattr(peer_conn, 'last_rate_calc'):
+                        peer_conn.last_rate_calc = current_time
+                        peer_conn.last_down = down
+                        peer_conn.last_up = up
+                        continue
+                    
+                    time_diff = max(1.0, current_time - peer_conn.last_rate_calc)
+                    
+                    peer_download_rate = max(0, (down - peer_conn.last_down) / time_diff)
+                    peer_upload_rate = max(0, (up - peer_conn.last_up) / time_diff)
+                    
+                    # Add to totals
+                    total_download_rate += peer_download_rate
+                    total_upload_rate += peer_upload_rate
+                    
+                    # Update stored values
+                    peer_conn.last_down = down
+                    peer_conn.last_up = up
+                    peer_conn.last_rate_calc = current_time
+                    
+                except Exception as e:
+                    logger.debug(f"Error calculating rates for peer {peer_id}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error calculating peer rates for torrent: {e}")
+        
+        return total_download_rate, total_upload_rate
+    
+    def get_enhanced_torrent_stats(self):
+        """Get enhanced torrent statistics with calculated rates."""
+        if not self.scheduler:
+            return []
+        
+        enhanced_stats = []
+        torrent_rates = self.calculate_torrent_rates()
+        
+        try:
+            for info_hash, session in self.scheduler.sessions.items():
+                info_hash_hex = info_hash.hex()
+                
+                # Get base stats from session
+                base_stats = session.get_stats()
+                
+                # Get calculated rates
+                rates = torrent_rates.get(info_hash_hex, {
+                    'download_rate': 0.0,
+                    'upload_rate': 0.0,
+                    'total_downloaded': 0,
+                    'total_uploaded': 0
+                })
+                
+                # Calculate peer-level rates as well for comparison
+                peer_download_rate, peer_upload_rate = self.calculate_peer_rates_for_torrent(session)
+                
+                # Use the higher of the two rate calculations
+                final_download_rate = max(rates['download_rate'], peer_download_rate)
+                final_upload_rate = max(rates['upload_rate'], peer_upload_rate)
+                
+                # Create enhanced stats
+                enhanced_stat = base_stats.copy()
+                enhanced_stat.update({
+                    'calculated_download_rate': rates['download_rate'],
+                    'calculated_upload_rate': rates['upload_rate'],
+                    'peer_download_rate': peer_download_rate,
+                    'peer_upload_rate': peer_upload_rate,
+                    'final_download_rate': final_download_rate,
+                    'final_upload_rate': final_upload_rate,
+                    'total_downloaded_bytes': rates['total_downloaded'],
+                    'total_uploaded_bytes': rates['total_uploaded']
+                })
+                
+                # Override the original rates with our calculated ones
+                enhanced_stat['download_rate'] = final_download_rate
+                enhanced_stat['upload_rate'] = final_upload_rate
+                
+                enhanced_stats.append(enhanced_stat)
+                
+        except Exception as e:
+            logger.error(f"Error getting enhanced torrent stats: {e}")
+            # Fallback to original stats
+            return [session.get_stats() for session in self.scheduler.sessions.values()]
+        
+        return enhanced_stats
+    
+    def format_rate_with_details(self, rate, peer_rate=None, session_rate=None):
+        """Format rate with additional details for debugging."""
+        from src.core.utils import format_speed
+        
+        main_rate = format_speed(rate)
+        
+        if peer_rate is not None and session_rate is not None:
+            return f"{main_rate} (P:{format_speed(peer_rate)}, S:{format_speed(session_rate)})"
+        
+        return main_rate
+    
+    def cleanup_rate_data(self):
+        """Clean up rate data for removed torrents."""
+        if not self.scheduler:
+            return
+        
+        try:
+            # Get current torrent info hashes
+            current_hashes = set(info_hash.hex() for info_hash in self.scheduler.sessions.keys())
+            
+            # Remove rate data for torrents that no longer exist
+            old_hashes = set(self.torrent_rate_data.keys()) - current_hashes
+            for old_hash in old_hashes:
+                del self.torrent_rate_data[old_hash]
+                logger.debug(f"Cleaned up rate data for removed torrent: {old_hash[:8]}")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up rate data: {e}")
     
     def setup_ui(self):
         """Setup the main UI."""
@@ -348,6 +539,20 @@ class BitTorrentMainWindow(QMainWindow):
         ]
         self.torrent_table.setColumnCount(len(headers))
         self.torrent_table.setHorizontalHeaderLabels(headers)
+        
+        # Set tooltips for rate columns to explain calculations
+        header = self.torrent_table.horizontalHeader()
+        download_item = self.torrent_table.horizontalHeaderItem(4)
+        if download_item:
+            download_item.setToolTip("Download Rate\n"
+                                   "Calculated from session totals and peer connections\n"
+                                   "Hover over values for calculation details")
+        
+        upload_item = self.torrent_table.horizontalHeaderItem(5)
+        if upload_item:
+            upload_item.setToolTip("Upload Rate\n"
+                                 "Calculated from session totals and peer connections\n"
+                                 "Hover over values for calculation details")
         
         # Configure table
         header = self.torrent_table.horizontalHeader()
@@ -702,6 +907,19 @@ class BitTorrentMainWindow(QMainWindow):
     def update_torrent_table(self, stats: List[Dict]):
         """Update the torrent table with current statistics."""
         try:
+            # Clean up old rate data
+            self.cleanup_rate_data()
+            
+            # Get enhanced stats with calculated rates
+            enhanced_stats = self.get_enhanced_torrent_stats()
+            
+            # Use enhanced stats if available, fallback to provided stats
+            if enhanced_stats:
+                stats = enhanced_stats
+                # Only log this occasionally to avoid spam
+                if len(enhanced_stats) > 0 and any(s.get('download_rate', 0) > 0 or s.get('upload_rate', 0) > 0 for s in enhanced_stats):
+                    logger.debug(f"Using enhanced rate calculations for {len(stats)} torrents")
+            
             # Store current stats for piece info lookup
             self.current_stats = stats
             
@@ -742,14 +960,50 @@ class BitTorrentMainWindow(QMainWindow):
                 
                 self.torrent_table.setItem(row, 3, status_item)
                 
-                # Download rate
+                # Download rate with enhanced calculation details
                 download_rate = stat.get('download_rate', 0)
-                download_item = QTableWidgetItem(format_speed(download_rate))
+                peer_download_rate = stat.get('peer_download_rate', 0)
+                session_download_rate = stat.get('calculated_download_rate', 0)
+                
+                # Show detailed rate information in tooltip and main text
+                if 'peer_download_rate' in stat and 'calculated_download_rate' in stat:
+                    download_text = self.format_rate_with_details(
+                        download_rate, peer_download_rate, session_download_rate
+                    )
+                    download_item = QTableWidgetItem(format_speed(download_rate))
+                    download_item.setToolTip(f"Final: {format_speed(download_rate)}\n"
+                                           f"Peer calculation: {format_speed(peer_download_rate)}\n"
+                                           f"Session calculation: {format_speed(session_download_rate)}")
+                else:
+                    download_item = QTableWidgetItem(format_speed(download_rate))
+                
+                # Color code active download rates
+                if download_rate > 1024:  # > 1 KB/s
+                    download_item.setBackground(QColor(33, 150, 243, 100))  # Light blue
+                
                 self.torrent_table.setItem(row, 4, download_item)
                 
-                # Upload rate
+                # Upload rate with enhanced calculation details
                 upload_rate = stat.get('upload_rate', 0)
-                upload_item = QTableWidgetItem(format_speed(upload_rate))
+                peer_upload_rate = stat.get('peer_upload_rate', 0)
+                session_upload_rate = stat.get('calculated_upload_rate', 0)
+                
+                # Show detailed rate information in tooltip and main text
+                if 'peer_upload_rate' in stat and 'calculated_upload_rate' in stat:
+                    upload_text = self.format_rate_with_details(
+                        upload_rate, peer_upload_rate, session_upload_rate
+                    )
+                    upload_item = QTableWidgetItem(format_speed(upload_rate))
+                    upload_item.setToolTip(f"Final: {format_speed(upload_rate)}\n"
+                                         f"Peer calculation: {format_speed(peer_upload_rate)}\n"
+                                         f"Session calculation: {format_speed(session_upload_rate)}")
+                else:
+                    upload_item = QTableWidgetItem(format_speed(upload_rate))
+                
+                # Color code active upload rates
+                if upload_rate > 1024:  # > 1 KB/s
+                    upload_item.setBackground(QColor(255, 152, 0, 100))  # Light orange
+                
                 self.torrent_table.setItem(row, 5, upload_item)
                 
                 # Peers
