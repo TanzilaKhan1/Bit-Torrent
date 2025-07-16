@@ -16,14 +16,213 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QTabWidget, QTableWidget, QTableWidgetItem, QProgressBar, QLabel, 
     QTextEdit, QPlainTextEdit, QPushButton, QFileDialog, QMessageBox, QSplitter,
-    QHeaderView, QStatusBar, QMenuBar, QToolBar, QSizePolicy
+    QHeaderView, QStatusBar, QMenuBar, QToolBar, QSizePolicy, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QFont, QColor, QAction, QKeySequence
+from PyQt6.QtGui import QFont, QColor, QAction, QKeySequence, QPainter, QPaintEvent
 
 from src.core.utils import format_bytes, format_speed, get_logger
 
 logger = get_logger(__name__)
+
+
+class PieceProgressWidget(QWidget):
+    """Widget to visualize piece download progress as individual bars."""
+    
+    def __init__(self):
+        super().__init__()
+        self.total_pieces = 0
+        self.completed_pieces = set()
+        self.piece_info = None  # Will store the selected torrent's piece info
+        self.setMinimumHeight(60)
+        self.setMaximumHeight(80)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #3c3c3c;
+                border: 1px solid #555555;
+                border-radius: 4px;
+            }
+        """)
+        
+    def set_piece_info(self, total_pieces: int, completed_pieces: set, torrent_name: str = ""):
+        """Set the piece information to display."""
+        self.total_pieces = total_pieces
+        self.completed_pieces = completed_pieces.copy() if completed_pieces else set()
+        self.piece_info = {
+            'name': torrent_name,
+            'total': total_pieces,
+            'completed': len(self.completed_pieces)
+        }
+        self.update()  # Trigger repaint
+        
+    def clear_pieces(self):
+        """Clear the piece visualization."""
+        self.total_pieces = 0
+        self.completed_pieces = set()
+        self.piece_info = None
+        self.update()
+    
+    def paintEvent(self, event: QPaintEvent):
+        """Custom paint event to draw thin vertical piece bars in grid style."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Get widget dimensions
+        width = self.width() - 20  # Leave some margin
+        height = self.height() - 20
+        start_x = 10
+        start_y = 10
+        
+        if self.total_pieces == 0 or not self.piece_info:
+            # Draw placeholder text
+            painter.setPen(QColor(200, 200, 200))
+            painter.setFont(QFont("Arial", 10))
+            painter.drawText(start_x, start_y + height//2 + 5, "Select a torrent to view piece progress")
+            return
+        
+        # Draw title
+        painter.setPen(QColor(255, 255, 255))
+        painter.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        title_text = f"Pieces: {self.piece_info['completed']}/{self.piece_info['total']} - {self.piece_info['name']}"
+        painter.drawText(start_x, start_y + 12, title_text)
+        
+        # Calculate bar area dimensions
+        bar_area_start_y = start_y + 18
+        bar_area_height = height - 18
+        
+        # Adaptive bar configuration based on piece count
+        if self.total_pieces <= 50:  # Small torrents - make bars larger and fill available space better
+            # Calculate optimal bar width to use available space efficiently
+            available_width = min(width, 600)  # Don't spread too wide for very small piece counts
+            total_spacing = (self.total_pieces - 1) * 2  # 2px spacing between bars
+            bar_width = max(4, (available_width - total_spacing) // self.total_pieces)
+            bar_spacing = 2
+            
+            # Cap bar width for very small piece counts to avoid overly thick bars
+            if self.total_pieces <= 20:
+                bar_width = min(bar_width, 12)
+            
+            bar_pitch = bar_width + bar_spacing
+            
+            # Calculate actual used width for border
+            actual_bars_width = (self.total_pieces * bar_width) + ((self.total_pieces - 1) * bar_spacing)
+            
+            # Center the bars if actual width is less than available width
+            bars_start_x = start_x + max(0, (width - actual_bars_width) // 2)
+            
+            # Draw individual bars in a single row
+            current_x = bars_start_x
+            for i in range(self.total_pieces):
+                # Choose color based on completion status
+                if i in self.completed_pieces:
+                    color = QColor(144, 238, 144)  # Light green for completed
+                else:
+                    color = QColor(200, 200, 200)  # Light gray for pending
+                
+                # Draw vertical bar
+                painter.fillRect(current_x, bar_area_start_y, bar_width, bar_area_height, color)
+                current_x += bar_pitch
+            
+            # Draw border around actual bars only
+            painter.setPen(QColor(160, 160, 160))
+            painter.drawRect(bars_start_x - 2, bar_area_start_y - 2, actual_bars_width + 4, bar_area_height + 4)
+            
+        elif self.total_pieces <= 300:  # Medium torrents - grid pattern
+            # Thin bar configuration
+            bar_width = 3
+            bar_spacing = 1
+            bar_pitch = bar_width + bar_spacing
+            
+            # Calculate grid layout
+            max_bars_per_row = width // bar_pitch
+            bars_per_row = min(max_bars_per_row, self.total_pieces)
+            num_rows = (self.total_pieces + bars_per_row - 1) // bars_per_row
+            row_height = max(6, bar_area_height // max(1, num_rows))
+            
+            # Calculate actual used dimensions
+            actual_width = (bars_per_row * bar_width) + ((bars_per_row - 1) * bar_spacing)
+            actual_height = (num_rows * row_height) + ((num_rows - 1) * 2)  # 2px spacing between rows
+            
+            # Center the grid
+            grid_start_x = start_x + max(0, (width - actual_width) // 2)
+            grid_start_y = bar_area_start_y + max(0, (bar_area_height - actual_height) // 2)
+            
+            piece_index = 0
+            for row in range(num_rows):
+                if piece_index >= self.total_pieces:
+                    break
+                
+                row_y = grid_start_y + (row * (row_height + 2))
+                current_x = grid_start_x
+                
+                for col in range(bars_per_row):
+                    if piece_index >= self.total_pieces:
+                        break
+                    
+                    # Choose color based on completion status
+                    if piece_index in self.completed_pieces:
+                        color = QColor(144, 238, 144)  # Light green for completed
+                    else:
+                        color = QColor(200, 200, 200)  # Light gray for pending
+                    
+                    # Draw thin vertical bar
+                    painter.fillRect(current_x, row_y, bar_width, row_height, color)
+                    
+                    current_x += bar_pitch
+                    piece_index += 1
+            
+            # Draw border around actual grid only
+            painter.setPen(QColor(160, 160, 160))
+            painter.drawRect(grid_start_x - 2, grid_start_y - 2, actual_width + 4, actual_height + 4)
+        else:
+            # For very large number of pieces, use dense single-row representation
+            bar_width = 2
+            bar_spacing = 1
+            bar_pitch = bar_width + bar_spacing
+            
+            max_bars = width // bar_pitch
+            pieces_per_bar = max(1, self.total_pieces // max_bars)
+            num_bars = min(max_bars, (self.total_pieces + pieces_per_bar - 1) // pieces_per_bar)
+            
+            # Calculate actual used width
+            actual_width = (num_bars * bar_width) + ((num_bars - 1) * bar_spacing)
+            bars_start_x = start_x + max(0, (width - actual_width) // 2)
+            
+            current_x = bars_start_x
+            for i in range(num_bars):
+                # Calculate which pieces this bar represents
+                start_piece = i * pieces_per_bar
+                end_piece = min((i + 1) * pieces_per_bar, self.total_pieces)
+                
+                # Check completion status
+                segment_pieces = set(range(start_piece, end_piece))
+                completed_in_segment = len(segment_pieces.intersection(self.completed_pieces))
+                completion_ratio = completed_in_segment / len(segment_pieces)
+                
+                if completion_ratio == 1.0:
+                    # Fully completed
+                    color = QColor(144, 238, 144)  # Light green
+                elif completion_ratio > 0.7:
+                    # Mostly completed
+                    color = QColor(173, 255, 173)  # Lighter green
+                elif completion_ratio > 0.3:
+                    # Partially completed
+                    color = QColor(255, 255, 144)  # Light yellow
+                elif completion_ratio > 0:
+                    # Barely started
+                    color = QColor(255, 220, 220)  # Light red
+                else:
+                    # Not started
+                    color = QColor(200, 200, 200)  # Light gray
+                
+                # Draw thin bar representing multiple pieces
+                painter.fillRect(current_x, bar_area_start_y, bar_width, bar_area_height, color)
+                
+                current_x += bar_pitch
+            
+            # Draw border around actual bars only
+            painter.setPen(QColor(160, 160, 160))
+            painter.drawRect(bars_start_x - 2, bar_area_start_y - 2, actual_width + 4, bar_area_height + 4)
 
 
 class StatsUpdateThread(QThread):
@@ -83,7 +282,12 @@ class BitTorrentMainWindow(QMainWindow):
         # GUI components
         self.torrent_table = None
         self.log_widget = None
+        self.piece_progress_widget = None
         self.stats_thread = None
+        
+        # Current selection tracking
+        self.selected_torrent_info_hash = None
+        self.current_stats = []  # Store current stats for piece info lookup
         
         # Session tracking
         self.session_start_time = time.time()
@@ -118,19 +322,23 @@ class BitTorrentMainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Vertical)
         main_layout.addWidget(splitter)
         
-        # Top: Torrent table
+        # Top: Torrent table (with scroll area)
         self.setup_torrent_table()
         splitter.addWidget(self.torrent_table)
+        
+        # Middle: Piece progress widget
+        self.setup_piece_progress_widget()
+        splitter.addWidget(self.piece_progress_widget)
         
         # Bottom: Log
         self.setup_log_widget()
         splitter.addWidget(self.log_widget)
         
-        # Set initial sizes
-        splitter.setSizes([600, 200])
+        # Set initial sizes - table gets most space, piece widget is small, log gets rest
+        splitter.setSizes([500, 50, 200])
     
     def setup_torrent_table(self):
-        """Setup the torrent table."""
+        """Setup the torrent table with scroll support."""
         self.torrent_table = QTableWidget()
         
         # Set headers
@@ -149,6 +357,17 @@ class BitTorrentMainWindow(QMainWindow):
         self.torrent_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.torrent_table.setAlternatingRowColors(True)
         self.torrent_table.setSortingEnabled(True)
+        
+        # Enable scrolling
+        self.torrent_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.torrent_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        # Connect selection changed signal
+        self.torrent_table.itemSelectionChanged.connect(self.on_torrent_selection_changed)
+    
+    def setup_piece_progress_widget(self):
+        """Setup the piece progress visualization widget."""
+        self.piece_progress_widget = PieceProgressWidget()
     
     def setup_log_widget(self):
         """Setup the log widget."""
@@ -160,6 +379,59 @@ class BitTorrentMainWindow(QMainWindow):
         # Add welcome message
         self.log_message("BitTorrent Client started")
         self.log_message("Ready to add torrents")
+    
+    def on_torrent_selection_changed(self):
+        """Handle torrent selection changes to update piece progress."""
+        selected_items = self.torrent_table.selectedItems()
+        
+        if selected_items:
+            # Get the first selected row
+            current_row = selected_items[0].row()
+            name_item = self.torrent_table.item(current_row, 0)
+            
+            if name_item:
+                info_hash_hex = name_item.data(Qt.ItemDataRole.UserRole)
+                self.selected_torrent_info_hash = info_hash_hex
+                
+                # Find the corresponding torrent stats
+                torrent_stat = None
+                for stat in self.current_stats:
+                    if stat.get('info_hash') == info_hash_hex:
+                        torrent_stat = stat
+                        break
+                
+                if torrent_stat:
+                    # Get piece information from the selected torrent
+                    total_pieces = torrent_stat.get('pieces_total', 0)
+                    pieces_completed = torrent_stat.get('pieces_completed', 0)
+                    torrent_name = torrent_stat.get('name', 'Unknown')
+                    
+                    # Get detailed piece information from scheduler if available
+                    completed_pieces_set = set()
+                    if self.app.scheduler and info_hash_hex:
+                        try:
+                            info_hash_bytes = bytes.fromhex(info_hash_hex)
+                            if info_hash_bytes in self.app.scheduler.sessions:
+                                session = self.app.scheduler.sessions[info_hash_bytes]
+                                if session.piece_manager:
+                                    completed_pieces_set = session.piece_manager.completed_pieces.copy()
+                        except Exception as e:
+                            logger.debug(f"Could not get detailed piece info: {e}")
+                            # Fallback: create a set based on the number of completed pieces
+                            completed_pieces_set = set(range(pieces_completed))
+                    
+                    # Update piece progress widget
+                    self.piece_progress_widget.set_piece_info(total_pieces, completed_pieces_set, torrent_name)
+                    
+                    logger.debug(f"Selected torrent: {torrent_name} ({pieces_completed}/{total_pieces} pieces)")
+                else:
+                    self.piece_progress_widget.clear_pieces()
+            else:
+                self.piece_progress_widget.clear_pieces()
+        else:
+            # No selection
+            self.selected_torrent_info_hash = None
+            self.piece_progress_widget.clear_pieces()
     
     def setup_menu_bar(self):
         """Setup the menu bar."""
@@ -323,6 +595,13 @@ class BitTorrentMainWindow(QMainWindow):
                 background-color: #555555;
                 color: #ffffff;
             }
+            QSplitter::handle {
+                background-color: #555555;
+                height: 3px;
+            }
+            QSplitter::handle:hover {
+                background-color: #4a90e2;
+            }
         """)
     
     def setup_components(self, scheduler, peer_server):
@@ -423,6 +702,9 @@ class BitTorrentMainWindow(QMainWindow):
     def update_torrent_table(self, stats: List[Dict]):
         """Update the torrent table with current statistics."""
         try:
+            # Store current stats for piece info lookup
+            self.current_stats = stats
+            
             # Disable sorting during updates
             self.torrent_table.setSortingEnabled(False)
             
@@ -485,6 +767,9 @@ class BitTorrentMainWindow(QMainWindow):
             # Re-enable sorting
             self.torrent_table.setSortingEnabled(True)
             
+            # Update piece progress widget for currently selected torrent
+            self.update_selected_torrent_piece_progress()
+            
             # Update status bar
             total_download = sum(s.get('download_rate', 0) for s in stats)
             total_upload = sum(s.get('upload_rate', 0) for s in stats)
@@ -495,6 +780,41 @@ class BitTorrentMainWindow(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error updating torrent table: {e}")
+    
+    def update_selected_torrent_piece_progress(self):
+        """Update piece progress for the currently selected torrent."""
+        if not self.selected_torrent_info_hash:
+            return
+        
+        # Find the corresponding torrent stats
+        torrent_stat = None
+        for stat in self.current_stats:
+            if stat.get('info_hash') == self.selected_torrent_info_hash:
+                torrent_stat = stat
+                break
+        
+        if torrent_stat:
+            # Get piece information from the selected torrent
+            total_pieces = torrent_stat.get('pieces_total', 0)
+            pieces_completed = torrent_stat.get('pieces_completed', 0)
+            torrent_name = torrent_stat.get('name', 'Unknown')
+            
+            # Get detailed piece information from scheduler if available
+            completed_pieces_set = set()
+            if self.app.scheduler and self.selected_torrent_info_hash:
+                try:
+                    info_hash_bytes = bytes.fromhex(self.selected_torrent_info_hash)
+                    if info_hash_bytes in self.app.scheduler.sessions:
+                        session = self.app.scheduler.sessions[info_hash_bytes]
+                        if session.piece_manager:
+                            completed_pieces_set = session.piece_manager.completed_pieces.copy()
+                except Exception as e:
+                    logger.debug(f"Could not get detailed piece info: {e}")
+                    # Fallback: create a set based on the number of completed pieces
+                    completed_pieces_set = set(range(pieces_completed))
+            
+            # Update piece progress widget
+            self.piece_progress_widget.set_piece_info(total_pieces, completed_pieces_set, torrent_name)
     
     def calculate_eta(self, stat: Dict) -> str:
         """Calculate ETA for torrent."""
