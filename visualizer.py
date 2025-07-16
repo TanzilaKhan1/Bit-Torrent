@@ -20,8 +20,8 @@ import sys
 pygame.init()
 
 # Constants
-WINDOW_WIDTH = 1800
-WINDOW_HEIGHT = 1200
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 600
 FPS = 60
 
 # Colors
@@ -93,7 +93,7 @@ class EnhancedPeerNode:
     reporter: Optional[str] = None
     
     # Visual properties
-    radius: float = 15.0
+    radius: float = 10.0
     pulse: float = 0.0
     last_activity: float = 0.0
     activity_level: float = 0.0
@@ -253,9 +253,9 @@ class CentralNetworkVisualizer:
         self.clock = pygame.time.Clock()
         
         # Fonts
-        self.font_large = pygame.font.Font(None, 36)
-        self.font_medium = pygame.font.Font(None, 28)
-        self.font_small = pygame.font.Font(None, 20)
+        self.font_large = pygame.font.Font(None, 24)
+        self.font_medium = pygame.font.Font(None, 18)
+        self.font_small = pygame.font.Font(None, 14)
         
         # Network data
         self.peers: Dict[str, EnhancedPeerNode] = {}
@@ -292,11 +292,15 @@ class CentralNetworkVisualizer:
         self.camera_y = 0
         self.zoom = 1.0
         
+        # Window dimensions
+        self.window_width = WINDOW_WIDTH
+        self.window_height = WINDOW_HEIGHT
+        
         # Layout for grouped visualization
         self.client_positions = {}
         self.layout_center_x = WINDOW_WIDTH // 2
         self.layout_center_y = WINDOW_HEIGHT // 2
-        self.layout_radius = 250
+        self.layout_radius = 180
         
         print(f"Central Network Visualizer initialized for {api_url}")
     
@@ -455,7 +459,7 @@ class CentralNetworkVisualizer:
                 # Check if this is a local peer (client node)
                 if peer_info.get('reporter') and peer_id.startswith('127.0.0.1:'):
                     peer.is_local_peer = True
-                    peer.radius = 25  # Larger for local peers
+                    peer.radius = 18  # Larger for local peers
                 
                 self.peers[peer_id] = peer
                 print(f"Added peer: {peer_info['host']}:{peer_info['port']} (via {peer_info.get('reporter', 'unknown')})")
@@ -594,7 +598,7 @@ class CentralNetworkVisualizer:
                     dy = peer.y - other.y
                     dist = math.sqrt(dx*dx + dy*dy)
                     
-                    min_dist = 100 if (peer.is_local_peer or other.is_local_peer) else 80
+                    min_dist = 70 if (peer.is_local_peer or other.is_local_peer) else 60
                     
                     if dist > 0 and dist < min_dist:
                         force = 3000 / (dist * dist)
@@ -609,8 +613,8 @@ class CentralNetworkVisualizer:
                     dy = other.y - peer.y
                     dist = math.sqrt(dx*dx + dy*dy)
                     
-                    if dist > 120:
-                        force = 150
+                    if dist > 90:
+                        force = 120
                         peer.vx += force * dx / dist * dt
                         peer.vy += force * dy / dist * dt
             
@@ -623,9 +627,9 @@ class CentralNetworkVisualizer:
             peer.y += peer.vy * dt
             
             # Boundary constraints (use current window size)
-            margin = 50
-            peer.x = max(margin, min(self.window_width - margin, peer.x))
-            peer.y = max(margin, min(self.window_height - margin, peer.y))
+            margin = 30
+            peer.x = max(margin, min(WINDOW_WIDTH - margin, peer.x))
+            peer.y = max(margin, min(WINDOW_HEIGHT - margin, peer.y))
     
     def update_animations(self, dt):
         """Update visual animations."""
@@ -633,8 +637,8 @@ class CentralNetworkVisualizer:
             peer.pulse += dt * 5.0
             
             # Update radius based on activity and type
-            base_radius = 25 if peer.is_local_peer else (20 if peer.is_seeder() else 15)
-            activity_bonus = peer.activity_level * 5
+            base_radius = 18 if peer.is_local_peer else (15 if peer.is_seeder() else 10)
+            activity_bonus = peer.activity_level * 3
             peer.radius = base_radius + activity_bonus
         
         # Update background particles
@@ -663,7 +667,7 @@ class CentralNetworkVisualizer:
         if client_count == 0:
             return
         
-        group_radius = min(350, max(200, client_count * 50))
+        group_radius = min(250, max(150, client_count * 35))
         
         for i, (reporter_id, peers) in enumerate(client_peers.items()):
             # Position client group
@@ -672,7 +676,7 @@ class CentralNetworkVisualizer:
             center_y = self.layout_center_y + group_radius * math.sin(angle)
             
             # Update peer positions within group
-            local_radius = min(100, max(50, len(peers) * 15))
+            local_radius = min(70, max(35, len(peers) * 10))
             
             for j, peer in enumerate(peers):
                 if len(peers) == 1:
@@ -695,7 +699,7 @@ class CentralNetworkVisualizer:
             return
         
         # Circular layout
-        radius = max(200, min(400, peer_count * 25))
+        radius = max(150, min(300, peer_count * 20))
         angle_step = 2 * math.pi / peer_count
         
         for i, peer in enumerate(self.peers.values()):
@@ -705,7 +709,7 @@ class CentralNetworkVisualizer:
     
     def init_background_effects(self):
         """Initialize background visual effects."""
-        for _ in range(100):
+        for _ in range(60):
             self.background_particles.append({
                 'x': random.uniform(0, WINDOW_WIDTH),
                 'y': random.uniform(0, WINDOW_HEIGHT),
@@ -723,13 +727,13 @@ class CentralNetworkVisualizer:
             
             # Wrap around screen (use current window size)
             if particle['x'] < 0:
-                particle['x'] = self.window_width
-            elif particle['x'] > self.window_width:
+                particle['x'] = WINDOW_WIDTH
+            elif particle['x'] > WINDOW_WIDTH:
                 particle['x'] = 0
             
             if particle['y'] < 0:
-                particle['y'] = self.window_height
-            elif particle['y'] > self.window_height:
+                particle['y'] = WINDOW_HEIGHT
+            elif particle['y'] > WINDOW_HEIGHT:
                 particle['y'] = 0
     
     def update_transfer_particles(self, dt):
@@ -824,7 +828,7 @@ class CentralNetworkVisualizer:
                 math.sqrt((peer.x - center_x)**2 + (peer.y - center_y)**2) 
                 for peer in peers
             )
-            group_radius = max_dist + 30
+            group_radius = max_dist + 20
             
             # Get reporter color
             reporter_hash = hash(reporter_id) % len(REPORTER_COLORS)
@@ -839,7 +843,7 @@ class CentralNetworkVisualizer:
             # Draw group label
             label = f"Client: {reporter_id.replace('peer_', '')}"
             text = self.font_small.render(label, True, group_color)
-            text_rect = text.get_rect(center=(center_x, center_y - group_radius - 15))
+            text_rect = text.get_rect(center=(center_x, center_y - group_radius - 8))
             
             # Text background
             bg_rect = text_rect.inflate(6, 4)
@@ -857,11 +861,11 @@ class CentralNetworkVisualizer:
             color = peer.get_color()
             
             # Enhanced shadow for local peers
-            shadow_size = radius + (5 if peer.is_local_peer else 2)
-            shadow_surf = pygame.Surface((shadow_size * 4, shadow_size * 4), pygame.SRCALPHA)
+            shadow_size = radius + (3 if peer.is_local_peer else 1)
+            shadow_surf = pygame.Surface((shadow_size * 3, shadow_size * 3), pygame.SRCALPHA)
             pygame.draw.circle(shadow_surf, (0, 0, 0, 60 if peer.is_local_peer else 40), 
-                             (shadow_size * 2, shadow_size * 2), shadow_size)
-            self.screen.blit(shadow_surf, (x - shadow_size * 2 + 3, y - shadow_size * 2 + 3))
+                             (shadow_size * 3 // 2, shadow_size * 3 // 2), shadow_size)
+            self.screen.blit(shadow_surf, (x - shadow_size * 3 // 2 + 2, y - shadow_size * 3 // 2 + 2))
             
             # Main circle with gradient effect
             for i in range(radius):
@@ -870,22 +874,22 @@ class CentralNetworkVisualizer:
                 pygame.draw.circle(self.screen, gradient_color, (x, y), radius - i, 1)
             
             # Core
-            core_radius = radius - 4 if peer.is_local_peer else radius - 3
+            core_radius = radius - 3 if peer.is_local_peer else radius - 2
             pygame.draw.circle(self.screen, color, (x, y), core_radius)
             
             # Local peer indicator (double ring)
             if peer.is_local_peer:
-                pygame.draw.circle(self.screen, WHITE, (x, y), radius + 3, 2)
-                pygame.draw.circle(self.screen, color, (x, y), radius + 6, 1)
+                pygame.draw.circle(self.screen, WHITE, (x, y), radius + 2, 1)
+                pygame.draw.circle(self.screen, color, (x, y), radius + 4, 1)
             
             # Progress ring for non-seeders
             if not peer.is_seeder() and peer.pieces_have > 0:
                 progress = peer.get_progress() / 100.0
-                self.draw_progress_arc(x, y, radius + 8, progress, GREEN)
+                self.draw_progress_arc(x, y, radius + 6, progress, GREEN)
             
             # Activity indicator
             if peer.activity_level > 0:
-                activity_radius = int(radius * 0.4)
+                activity_radius = int(radius * 0.3)
                 activity_alpha = int(peer.activity_level * 200)
                 activity_surf = pygame.Surface((activity_radius * 2, activity_radius * 2), pygame.SRCALPHA)
                 activity_color = ORANGE if peer.upload_rate > peer.download_rate else BLUE
@@ -899,7 +903,7 @@ class CentralNetworkVisualizer:
                 label = f"[{peer.reporter.replace('peer_', '')}] {label}"
             
             text = self.font_small.render(label, True, WHITE)
-            text_rect = text.get_rect(center=(x, y + radius + 18))
+            text_rect = text.get_rect(center=(x, y + radius + 8))
             
             # Text background
             bg_rect = text_rect.inflate(6, 4)
@@ -977,8 +981,8 @@ class CentralNetworkVisualizer:
         if distance == 0:
             return
         
-        dash_length = 15
-        gap_length = 8
+        dash_length = 10
+        gap_length = 6
         offset = (time.time() * 100) % (dash_length + gap_length)
         
         num_dashes = int(distance / (dash_length + gap_length)) + 1
@@ -1016,26 +1020,26 @@ class CentralNetworkVisualizer:
                 y = from_peer.y + (to_peer.y - from_peer.y) * progress
                 
                 # Particle properties
-                size = max(4, min(8, int(4 + transfer.rate / 50000)))
+                size = max(3, min(6, int(3 + transfer.rate / 50000)))
                 color = ORANGE if transfer.transfer_type == 'upload' else BLUE
                 alpha = int(255 * (1.0 - progress))
                 
                 # Draw particle with glow
-                particle_surf = pygame.Surface((size * 3, size * 3), pygame.SRCALPHA)
+                particle_surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
                 
                 # Outer glow
                 pygame.draw.circle(particle_surf, (*color, alpha // 3), 
-                                 (size * 3 // 2, size * 3 // 2), size + 2)
+                                 (size, size), size + 1)
                 # Inner particle
                 pygame.draw.circle(particle_surf, (*color, alpha), 
-                                 (size * 3 // 2, size * 3 // 2), size)
+                                 (size, size), size)
                 
-                self.screen.blit(particle_surf, (x - size * 3 // 2, y - size * 3 // 2))
+                self.screen.blit(particle_surf, (x - size, y - size))
     
     def render_stats_panel(self):
         """Render enhanced statistics panel for central view."""
-        panel_width = 380
-        panel_height = 400
+        panel_width = 280
+        panel_height = 300
         panel_x = WINDOW_WIDTH - panel_width - 10
         panel_y = 10
         
@@ -1050,7 +1054,7 @@ class CentralNetworkVisualizer:
         # Title
         title = self.font_medium.render("Central Network Statistics", True, WHITE)
         self.screen.blit(title, (panel_x + 10, panel_y + y_offset))
-        y_offset += 35
+        y_offset += 25
         
         # Network statistics
         stats = [
@@ -1071,7 +1075,7 @@ class CentralNetworkVisualizer:
             else:
                 text = self.font_small.render(stat, True, WHITE)
             self.screen.blit(text, (panel_x + 10, panel_y + y_offset))
-            y_offset += 20
+            y_offset += 15
         
         # Client breakdown
         client_peers = defaultdict(int)
@@ -1088,17 +1092,17 @@ class CentralNetworkVisualizer:
             
             # Color indicator
             pygame.draw.circle(self.screen, color, 
-                             (panel_x + 20, panel_y + y_offset + 8), 6)
+                             (panel_x + 15, panel_y + y_offset + 6), 4)
             
             text = self.font_small.render(f"  {reporter_id}: {count} peers", True, WHITE)
-            self.screen.blit(text, (panel_x + 35, panel_y + y_offset))
-            y_offset += 18
+            self.screen.blit(text, (panel_x + 25, panel_y + y_offset))
+            y_offset += 12
         
         # Connection types
         y_offset += 10
         status_title = self.font_small.render("Peer Status Distribution:", True, YELLOW)
         self.screen.blit(status_title, (panel_x + 10, panel_y + y_offset))
-        y_offset += 20
+        y_offset += 15
         
         # Count peer statuses
         status_counts = {}
@@ -1110,19 +1114,19 @@ class CentralNetworkVisualizer:
             
             # Color indicator
             pygame.draw.circle(self.screen, color, 
-                             (panel_x + 20, panel_y + y_offset + 8), 5)
+                             (panel_x + 15, panel_y + y_offset + 6), 4)
             
             text = self.font_small.render(f"  {status.title()}: {count}", True, WHITE)
-            self.screen.blit(text, (panel_x + 35, panel_y + y_offset))
-            y_offset += 18
+            self.screen.blit(text, (panel_x + 25, panel_y + y_offset))
+            y_offset += 12
     
     def render_client_info_panel(self):
         """Render connected clients information."""
         if not self.connected_clients:
             return
         
-        panel_width = 300
-        panel_height = min(200, len(self.connected_clients) * 25 + 50)
+        panel_width = 220
+        panel_height = min(120, len(self.connected_clients) * 15 + 30)
         panel_x = 10
         panel_y = 10
         
@@ -1137,7 +1141,7 @@ class CentralNetworkVisualizer:
         # Title
         title = self.font_medium.render("Connected Clients", True, GREEN)
         self.screen.blit(title, (panel_x + 10, panel_y + y_offset))
-        y_offset += 30
+        y_offset += 20
         
         # Client list
         for client_id in self.connected_clients:
@@ -1146,15 +1150,15 @@ class CentralNetworkVisualizer:
             
             # Status indicator
             pygame.draw.circle(self.screen, color, 
-                             (panel_x + 20, panel_y + y_offset + 8), 6)
+                             (panel_x + 15, panel_y + y_offset + 6), 4)
             
             text = self.font_small.render(f"  {client_id}", True, WHITE)
-            self.screen.blit(text, (panel_x + 35, panel_y + y_offset))
-            y_offset += 22
+            self.screen.blit(text, (panel_x + 25, panel_y + y_offset))
+            y_offset += 15
     
     def render_status_bar(self):
         """Render status bar with central visualizer info."""
-        bar_height = 35
+        bar_height = 25
         bar_rect = pygame.Rect(0, WINDOW_HEIGHT - bar_height, WINDOW_WIDTH, bar_height)
         
         # Background
@@ -1164,13 +1168,13 @@ class CentralNetworkVisualizer:
         
         # Status message
         status_text = self.font_small.render(self.status_message, True, self.status_color)
-        self.screen.blit(status_text, (10, WINDOW_HEIGHT - bar_height + 10))
+        self.screen.blit(status_text, (10, WINDOW_HEIGHT - bar_height + 8))
         
         # Controls hint
         controls_text = "C:Connections T:Transfers S:Stats I:Info L:Clients P:Physics A:Auto G:Group R:Reset"
         controls = self.font_small.render(controls_text, True, LIGHT_GRAY)
-        controls_rect = controls.get_rect(right=self.window_width - 10, 
-                                        centery=self.window_height - bar_height // 2)
+        controls_rect = controls.get_rect(right=WINDOW_WIDTH - 8, 
+                                        centery=WINDOW_HEIGHT - bar_height // 2)
         self.screen.blit(controls, controls_rect)
     
     def render_no_data_message(self):
@@ -1187,7 +1191,7 @@ class CentralNetworkVisualizer:
             f"API URL: {self.data_collector.api_url}"
         ]
         
-        y_start = WINDOW_HEIGHT // 2 - len(messages) * 20
+        y_start = WINDOW_HEIGHT // 2 - len(messages) * 15
         
         for i, message in enumerate(messages):
             if message:
@@ -1199,7 +1203,7 @@ class CentralNetworkVisualizer:
                     color = WHITE
                     
                 text = self.font_medium.render(message, True, color)
-                rect = text.get_rect(center=(WINDOW_WIDTH // 2, y_start + i * 35))
+                rect = text.get_rect(center=(WINDOW_WIDTH // 2, y_start + i * 25))
                 self.screen.blit(text, rect)
     
     def draw_progress_arc(self, x, y, radius, progress, color):
@@ -1276,9 +1280,10 @@ class CentralNetworkVisualizer:
         if self.screen.get_flags() & pygame.FULLSCREEN:
             # Exit fullscreen
             self.screen = pygame.display.set_mode(
-                (self.window_width, self.window_height), 
+                (WINDOW_WIDTH, WINDOW_HEIGHT), 
                 pygame.RESIZABLE
             )
+            self.handle_window_resize((WINDOW_WIDTH, WINDOW_HEIGHT))
         else:
             # Enter fullscreen
             info = pygame.display.Info()
@@ -1287,6 +1292,12 @@ class CentralNetworkVisualizer:
                 pygame.FULLSCREEN
             )
             self.handle_window_resize((info.current_w, info.current_h))
+    
+    def handle_window_resize(self, size):
+        """Handle window resize events."""
+        self.window_width, self.window_height = size
+        self.layout_center_x = self.window_width // 2
+        self.layout_center_y = self.window_height // 2
     
     def handle_mouse_down(self, pos, button):
         """Handle mouse button down."""
@@ -1352,10 +1363,10 @@ class CentralNetworkVisualizer:
             return
         
         peer = self.selected_peer
-        panel_width = 350
-        panel_height = 280
+        panel_width = 250
+        panel_height = 160
         panel_x = 10
-        panel_y = WINDOW_HEIGHT - panel_height - 45  # Above status bar
+        panel_y = WINDOW_HEIGHT - panel_height - 35  # Above status bar
         
         # Panel background
         panel_surf = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
@@ -1368,7 +1379,7 @@ class CentralNetworkVisualizer:
         # Title
         title = self.font_medium.render("Peer Information", True, WHITE)
         self.screen.blit(title, (panel_x + 10, panel_y + y_offset))
-        y_offset += 30
+        y_offset += 20
         
         # Peer details
         details = [
@@ -1397,7 +1408,7 @@ class CentralNetworkVisualizer:
                 
             text = self.font_small.render(detail, True, color)
             self.screen.blit(text, (panel_x + 10, panel_y + y_offset))
-            y_offset += 18
+            y_offset += 12
 
 def main():
     """Main entry point with command line arguments."""
