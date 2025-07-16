@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
- BitTorrent Client - Main Entry Point (FIXED IMPORTS)
+ BitTorrent Client - Main Entry Point with Central Visualizer Support
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from src.core.scheduler import TorrentScheduler
 logger = get_logger(__name__)
 
 class BitTorrentApplication:
-    """Main application class with simplified architecture."""
+    """Main application class with central visualizer support."""
     
     def __init__(self):
         self.scheduler = None
@@ -38,10 +38,10 @@ class BitTorrentApplication:
         self.event_loop = None
         self.loop_thread = None
         
-        # Add visualizer data provider
+        # Add visualizer data provider with aggregator support
         self.data_provider = None
         self.visualizer_enabled = False
-        self.data_provider_thread = None
+        self.aggregator_url = None
         
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
@@ -65,15 +65,18 @@ class BitTorrentApplication:
         while not self.event_loop:
             time.sleep(0.1)
             
-    def enable_visualizer(self, api_port=8081):
-        """Enable the network visualizer."""
+    def enable_visualizer(self, api_port=8081, aggregator_url=None):
+        """Enable the network visualizer with optional central aggregator support."""
         try:
-            # FIXED: Import the comprehensive data provider
-            from enhanced_data_provider_fixed import ComprehensiveTrackerDataProvider
+            # Import here to avoid circular imports
+            from tracker_data import EnhancedTrackerDataProvider
+            
+            self.aggregator_url = aggregator_url
             
             self.data_provider = ComprehensiveTrackerDataProvider(
                 tracker_port=8080,  # Your tracker port
-                api_port=api_port
+                api_port=api_port,
+                aggregator_url=aggregator_url  # Pass aggregator URL
             )
             
             # Set component references
@@ -99,15 +102,20 @@ class BitTorrentApplication:
             provider_thread.start()
             
             self.visualizer_enabled = True
-            print(f"✅ FIXED: Comprehensive network visualizer API started on port {api_port}")
-            print(f"🎮 Launch visualizer with: python visualizer_fixed.py")
-            print(f"🌐 Web interface: http://localhost:{api_port}/")
-            print(f"📊 This shows ALL peers with proper color coding!")
+            
+            if aggregator_url:
+                print(f"✓ Network visualizer enabled with central aggregator")
+                print(f"  Local API: http://localhost:{api_port}/")
+                print(f"  Reporting to: {aggregator_url}")
+                print(f"  Reporter ID: peer_{api_port}")
+            else:
+                print(f"✓ Network visualizer API started on port {api_port}")
+                print(f"  Local mode - not reporting to central aggregator")
+                print(f"  Launch visualizer with: python visualizer.py --api-url http://localhost:{api_port}")
             
         except ImportError as e:
-            print(f"❌ Could not import visualizer components: {e}")
-            print("📁 Make sure enhanced_data_provider_fixed.py is in the current directory")
-            print("📥 Download the comprehensive data provider from the artifacts above")
+            print(f"Could not import visualizer components: {e}")
+            print("Make sure tracker_data.py is in the current directory")
         except Exception as e:
             print(f"❌ Failed to enable visualizer: {e}")
             import traceback
@@ -130,7 +138,8 @@ class BitTorrentApplication:
         future = asyncio.run_coroutine_threadsafe(coro, self.event_loop)
         return future
     
-    def setup_gui(self, port: int, download_dir: str, enable_visualizer=False, visualizer_port=8081):
+    def setup_gui(self, port: int, download_dir: str, enable_visualizer=bool, 
+                  visualizer_port=int, aggregator_url=None):
         """Setup GUI interface."""
         try:
             from PyQt6.QtWidgets import QApplication
@@ -156,7 +165,7 @@ class BitTorrentApplication:
             
             # Enable visualizer if requested
             if enable_visualizer and not self.visualizer_enabled:
-                self.enable_visualizer(visualizer_port)
+                self.enable_visualizer(visualizer_port, aggregator_url)
             
             self.gui_mode = True
             logger.info("FIXED: GUI setup complete")
@@ -192,10 +201,10 @@ class BitTorrentApplication:
             raise
     
     def run_gui(self, port, download_dir, torrent_path=None,
-                enable_visualizer=False, visualizer_port=8081):        
+                enable_visualizer=False, visualizer_port=8081, aggregator_url=None):        
         """Run GUI application."""
         try:
-            self.setup_gui(port, download_dir, enable_visualizer, visualizer_port)
+            self.setup_gui(port, download_dir, enable_visualizer, visualizer_port, aggregator_url)
             
             # Add initial torrent if provided
             if torrent_path:
@@ -481,7 +490,7 @@ async def run_tracker(port: int = 8080):
     
     try:
         await tracker.start()
-        print(f"🎯 FIXED: Tracker started on http://localhost:{port}")
+        print(f"🎯 Tracker started on http://localhost:{port}")
         print(f"📊 Stats: http://localhost:{port}/stats")
         print("Press Ctrl+C to stop")
         
@@ -496,14 +505,35 @@ async def run_tracker(port: int = 8080):
         await tracker.stop()
 
 
+async def run_aggregator(port: int = 8085):
+    """Run central visualizer aggregator."""
+    try:
+        from aggregator import VisualizerDataAggregator
+        
+        aggregator = VisualizerDataAggregator(port=port)
+        await aggregator.start()
+        
+    except ImportError:
+        print("Error: visualizer_aggregator.py not found!")
+        print("Make sure you have the visualizer_aggregator.py file in the same directory.")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error running aggregator: {e}")
+        sys.exit(1)
+
+
 def main():
-    """Main entry point with FIXED visualizer support."""
-    parser = argparse.ArgumentParser(description='FIXED BitTorrent Client with Comprehensive Visualizer')
+    """Main entry point with central visualizer support."""
+    parser = argparse.ArgumentParser(description='BitTorrent Client with Central Visualizer')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
     # Tracker command
     tracker_parser = subparsers.add_parser('tracker', help='Run tracker')
     tracker_parser.add_argument('--port', type=int, default=8080, help='Tracker port')
+    
+    # Aggregator command
+    aggregator_parser = subparsers.add_parser('aggregator', help='Run central visualizer aggregator')
+    aggregator_parser.add_argument('--port', type=int, default=8085, help='Aggregator port')
     
     # Peer command
     peer_parser = subparsers.add_parser('peer', help='Run peer')
@@ -514,6 +544,8 @@ def main():
                            help='Enable FIXED comprehensive network visualizer')
     peer_parser.add_argument('--visualizer-port', type=int, default=8081,
                            help='Visualizer API port')
+    peer_parser.add_argument('--aggregator-url', 
+                           help='Central aggregator URL (e.g., http://localhost:8085)')
     
     args = parser.parse_args()
     
@@ -527,11 +559,21 @@ def main():
         if args.command == 'tracker':
             print(f"🎯 Starting FIXED tracker on port {args.port}")
             asyncio.run(run_tracker(args.port))
+            
+        elif args.command == 'aggregator':
+            print(f"🌐 Starting central visualizer aggregator on port {args.port}")
+            asyncio.run(run_aggregator(args.port))
+            
         elif args.command == 'peer':
-            print(f"🚀 Starting FIXED peer with GUI on port {args.port}")
-            if args.enable_visualizer:
-                print(f"🔧 Comprehensive visualizer will be enabled on port {args.visualizer_port}")
-                print(f"📊 This shows ALL peers with proper color coding!")
+            print(f"🚀 Starting peer with GUI on port {args.port}")
+            
+            # Validate aggregator URL if provided
+            aggregator_url = args.aggregator_url
+            if args.enable_visualizer and aggregator_url:
+                if not aggregator_url.startswith('http'):
+                    print(f"Warning: Aggregator URL should start with http:// or https://")
+                    print(f"Using: {aggregator_url}")
+            
             sys.exit(
                 app.run_gui(
                     port=args.port,
@@ -539,6 +581,7 @@ def main():
                     torrent_path=args.torrent,
                     enable_visualizer=args.enable_visualizer,
                     visualizer_port=args.visualizer_port,
+                    aggregator_url=aggregator_url,
                 )
             )
         else:

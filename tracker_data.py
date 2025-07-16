@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-
 import asyncio
 import json
 import time
+import aiohttp
 from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, asdict
 from aiohttp import web
@@ -60,11 +60,12 @@ class TorrentStatus:
     pieces_total: int
 
 class EnhancedTrackerDataProvider:
-    """Enhanced data provider that works with existing BitTorrent implementation."""
+    """Enhanced data provider that reports to central aggregator."""
     
-    def __init__(self, tracker_port: int = 8080, api_port: int = 8081):
+    def __init__(self, tracker_port: int = 8080, api_port: int = 8081, aggregator_url: Optional[str] = None):
         self.tracker_port = tracker_port
         self.api_port = api_port
+        self.aggregator_url = aggregator_url
         self.app = web.Application()
         self.runner = None
         self.site = None
@@ -82,16 +83,25 @@ class EnhancedTrackerDataProvider:
         
         # Background tasks
         self.update_task = None
+        self.report_task = None
         self.running = False
         
-        # Setup API routes
+        # Reporter identification
+        self.reporter_id = f"peer_{api_port}"
+        
+        # HTTP session for reporting
+        self.session = None
+        
+        # Setup API routes (still provide local API for debugging)
         self.setup_routes()
         
         logger.info(f"Enhanced tracker data provider initialized on port {api_port}")
+        if aggregator_url:
+            logger.info(f"Will report to aggregator: {aggregator_url}")
     
     def setup_routes(self):
-        """Setup API routes for the visualizer."""
-        # CORS middleware - fixed implementation
+        """Setup API routes for local debugging."""
+        # CORS middleware
         @web.middleware
         async def cors_handler(request, handler):
             response = await handler(request)
@@ -102,16 +112,14 @@ class EnhancedTrackerDataProvider:
         
         self.app.middlewares.append(cors_handler)
         
-        # API routes
+        # Local API routes for debugging
         self.app.router.add_get('/api/network', self.get_network_data)
         self.app.router.add_get('/api/peers', self.get_peer_data)
         self.app.router.add_get('/api/torrents', self.get_torrent_data)
         self.app.router.add_get('/api/connections', self.get_connection_data)
         self.app.router.add_get('/api/transfers', self.get_transfer_data)
         self.app.router.add_get('/api/stats', self.get_enhanced_stats)
-        
-        # Root route for the visualizer
-        self.app.router.add_get('/', self.serve_visualizer)
+        self.app.router.add_get('/', self.serve_local_info)
     
     def set_components(self, tracker=None, scheduler=None, peer_server=None):
         """Set references to BitTorrent components."""
@@ -121,36 +129,53 @@ class EnhancedTrackerDataProvider:
         logger.info("BitTorrent components connected to data provider")
     
     async def start(self):
-        """Start the data provider API server."""
+        """Start the data provider and reporting."""
         self.running = True
         
+        # Create HTTP session for reporting
+        if self.aggregator_url:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=5)
+            )
+        
         try:
+            # Start local API server
             self.runner = web.AppRunner(self.app)
             await self.runner.setup()
             
             self.site = web.TCPSite(self.runner, 'localhost', self.api_port)
             await self.site.start()
             
-            # Start data update task
+            # Start background tasks
             self.update_task = asyncio.create_task(self.update_data_loop())
             
-            logger.info(f"Enhanced data provider API started on http://localhost:{self.api_port}")
-            logger.info(f"Visualizer available at: http://localhost:{self.api_port}/")
+            if self.aggregator_url:
+                self.report_task = asyncio.create_task(self.report_to_aggregator_loop())
+                logger.info(f"Started reporting to aggregator: {self.aggregator_url}")
+            
+            logger.info(f"Enhanced data provider started on http://localhost:{self.api_port}")
             
         except Exception as e:
-            logger.error(f"Failed to start data provider API: {e}")
+            logger.error(f"Failed to start data provider: {e}")
             raise
     
     async def stop(self):
-        """Stop the data provider API server."""
+        """Stop the data provider."""
         self.running = False
         
+        # Cancel tasks
         if self.update_task:
             self.update_task.cancel()
+        if self.report_task:
+            self.report_task.cancel()
         
+        # Close HTTP session
+        if self.session:
+            await self.session.close()
+        
+        # Stop web server
         if self.site:
             await self.site.stop()
-        
         if self.runner:
             await self.runner.cleanup()
         
@@ -165,7 +190,7 @@ class EnhancedTrackerDataProvider:
                 await self.update_connection_graph()
                 await self.detect_data_transfers()
                 
-                await asyncio.sleep(0.5)  # Update twice per second for smoother visualization
+                await asyncio.sleep(1.0)  # Update every second
                 
             except asyncio.CancelledError:
                 break
@@ -173,22 +198,132 @@ class EnhancedTrackerDataProvider:
                 logger.error(f"Error in data update loop: {e}")
                 await asyncio.sleep(5.0)
     
+    async def report_to_aggregator_loop(self):
+        """Background task to report data to central aggregator."""
+        if not self.aggregator_url:
+            return
+        
+        consecutive_failures = 0
+        max_failures = 5
+        
+        while self.running:
+            try:
+                # Prepare data to report
+                network_data = await self.prepare_network_data()
+                
+                # Add reporter identification
+                report_data = {
+                    'reporter_id': self.reporter_id,
+                    'peers': {pid: asdict(peer) for pid, peer in self.peer_connections.items()},
+                    'connections': {pid: list(connections) for pid, connections in self.connection_graph.items()},
+                    'transfers': self.data_transfers,
+                    'torrents': {tid: asdict(torrent) for tid, torrent in self.torrent_statuses.items()},
+                    'timestamp': time.time(),
+                    'client_info': {
+                        'port': self.api_port,
+                        'tracker_port': self.tracker_port,
+                        'version': '1.0'
+                    }
+                }
+                
+                # Send to aggregator
+                async with self.session.post(
+                    f"{self.aggregator_url}/report",
+                    json=report_data,
+                    headers={'Content-Type': 'application/json'}
+                ) as response:
+                    if response.status == 200:
+                        consecutive_failures = 0
+                        logger.debug(f"Successfully reported to aggregator")
+                    else:
+                        consecutive_failures += 1
+                        logger.warning(f"Aggregator returned status {response.status}")
+                
+                await asyncio.sleep(2.0)  # Report every 2 seconds
+                
+            except aiohttp.ClientError as e:
+                consecutive_failures += 1
+                if consecutive_failures <= max_failures:
+                    logger.warning(f"Failed to report to aggregator: {e} (attempt {consecutive_failures})")
+                elif consecutive_failures == max_failures + 1:
+                    logger.error(f"Aggregator unreachable, stopping error messages")
+                
+                await asyncio.sleep(5.0)  # Wait longer on error
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                consecutive_failures += 1
+                logger.error(f"Error reporting to aggregator: {e}")
+                await asyncio.sleep(5.0)
+    
+    async def prepare_network_data(self):
+        """Prepare network data for reporting."""
+        # Include local peer info
+        local_peers = {}
+        if self.scheduler and self.scheduler.sessions:
+            for session in self.scheduler.sessions.values():
+                local_peer_id = f"127.0.0.1:{session.port}"
+                local_peers[local_peer_id] = {
+                    'peer_id': local_peer_id,
+                    'host': '127.0.0.1',
+                    'port': session.port,
+                    'connection_time': time.time() - getattr(session, 'start_time', time.time()),
+                    'bytes_downloaded': getattr(session, 'total_downloaded', 0),
+                    'bytes_uploaded': getattr(session, 'total_uploaded', 0),
+                    'download_rate': getattr(session, 'download_rate', 0),
+                    'upload_rate': getattr(session, 'upload_rate', 0),
+                    'pieces_have': session.piece_manager.get_completed_count() if hasattr(session, 'piece_manager') else 0,
+                    'pieces_need': len(getattr(session.piece_manager, 'pending_pieces', [])) if hasattr(session, 'piece_manager') else 0,
+                    'status': 'seeding' if getattr(session, 'state', None) and session.state.value == 'seeding' else 'downloading',
+                    'connected_to': list(self.connection_graph.get(local_peer_id, set())),
+                    'downloading_from': [],
+                    'uploading_to': []
+                }
+        elif self.scheduler:
+            # Empty state fix: create placeholder local peer
+            default_port = getattr(self.scheduler, 'listen_port', self.api_port)
+            local_peer_id = f"127.0.0.1:{default_port}"
+            local_peers[local_peer_id] = {
+                'peer_id': local_peer_id,
+                'host': '127.0.0.1',
+                'port': default_port,
+                'connection_time': 0,
+                'bytes_downloaded': 0,
+                'bytes_uploaded': 0,
+                'download_rate': 0,
+                'upload_rate': 0,
+                'pieces_have': 0,
+                'pieces_need': 0,
+                'status': 'waiting',
+                'connected_to': [],
+                'downloading_from': [],
+                'uploading_to': []
+            }
+        
+        return {
+            'local_peers': local_peers,
+            'remote_peers': {pid: asdict(peer) for pid, peer in self.peer_connections.items()}
+        }
+    
+    # Data update methods (same as before)
     async def update_peer_connections(self):
         """Update peer connection information."""
         if not self.scheduler:
             return
         
         try:
-            # Clear old peer connections first
             self.peer_connections.clear()
             
-            # EMPTY STATE FIX: Handle case where there are no sessions
             if not self.scheduler.sessions:
                 logger.debug("No active torrent sessions")
                 return
             
             for info_hash, session in self.scheduler.sessions.items():
                 for peer_id, conn in session.peer_connections.items():
+                    # Create consistent peer ID format
+                    consistent_peer_id = f"{conn.host}:{conn.port}"
+                    
                     # Get connection statistics
                     down, up, pending = conn.get_stats()
                     
@@ -204,26 +339,24 @@ class EnhancedTrackerDataProvider:
                     conn.last_up = up
                     conn.last_rate_calc = current_time
                     
-                    # Build lists of connected peers
+                    # Build connection lists
                     downloading_from = []
                     uploading_to = []
                     connected_to = []
                     
-                    # Check if actively downloading or uploading
                     if conn.connected and not conn.peer_choking and conn.am_interested:
                         if download_rate > 0:
-                            downloading_from.append(peer_id)
+                            downloading_from.append(consistent_peer_id)
                     
                     if conn.connected and not conn.am_choking and conn.peer_interested:
                         if upload_rate > 0:
-                            uploading_to.append(peer_id)
+                            uploading_to.append(consistent_peer_id)
                     
-                    # All connected peers
                     if conn.connected:
-                        connected_to.append(peer_id)
+                        connected_to.append(consistent_peer_id)
                     
                     peer_info = PeerConnectionInfo(
-                        peer_id=peer_id,
+                        peer_id=consistent_peer_id,
                         host=conn.host,
                         port=conn.port,
                         connection_time=time.time() - getattr(conn, 'connection_start_time', time.time()),
@@ -239,40 +372,10 @@ class EnhancedTrackerDataProvider:
                         uploading_to=uploading_to
                     )
                     
-                    self.peer_connections[peer_id] = peer_info
-                    
-                    # Also add incoming connections from peer server
-                    if self.peer_server and hasattr(self.peer_server, 'connections'):
-                        for incoming_conn in self.peer_server.connections.values():
-                            if hasattr(incoming_conn, 'connection') and hasattr(incoming_conn.connection, 'info_hash'):
-                                if incoming_conn.connection.info_hash == info_hash:
-                                    incoming_peer_id = f"{incoming_conn.host}:{incoming_conn.port}"
-                                    if incoming_peer_id not in self.peer_connections:
-                                        down, up, _ = incoming_conn.connection.get_stats()
-                                        
-                                        peer_info = PeerConnectionInfo(
-                                            peer_id=incoming_peer_id,
-                                            host=incoming_conn.host,
-                                            port=incoming_conn.port,
-                                            connection_time=time.time() - getattr(incoming_conn, 'connected_at', time.time()),
-                                            bytes_downloaded=down,
-                                            bytes_uploaded=up,
-                                            download_rate=0.0,
-                                            upload_rate=0.0,
-                                            pieces_have=len(incoming_conn.connection.peer_pieces),
-                                            pieces_need=0,
-                                            status=self.determine_peer_status(incoming_conn.connection),
-                                            connected_to=[],
-                                            downloading_from=[],
-                                            uploading_to=[]
-                                        )
-                                        
-                                        self.peer_connections[incoming_peer_id] = peer_info
+                    self.peer_connections[consistent_peer_id] = peer_info
         
         except Exception as e:
             logger.error(f"Error updating peer connections: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
     
     async def update_torrent_statuses(self):
         """Update torrent status information."""
@@ -280,10 +383,8 @@ class EnhancedTrackerDataProvider:
             return
         
         try:
-            # EMPTY STATE FIX: Clear old statuses
             self.torrent_statuses.clear()
             
-            # Handle empty state
             if not self.scheduler.sessions:
                 logger.debug("No active torrent sessions for status update")
                 return
@@ -328,28 +429,19 @@ class EnhancedTrackerDataProvider:
             return
         
         try:
-            # EMPTY STATE FIX: Handle no sessions
             if not self.scheduler.sessions:
                 return
             
-            # Build connection graph from actual peer connections
             for info_hash, session in self.scheduler.sessions.items():
-                # For each peer in the session
+                my_id = f"127.0.0.1:{session.port}"
+                
                 for peer_id, peer_conn in session.peer_connections.items():
+                    consistent_peer_id = f"{peer_conn.host}:{peer_conn.port}"
+                    
                     if peer_conn.connected:
                         # Add bidirectional connection
-                        my_id = f"{session.port}"  # Use port as local peer identifier
-                        self.connection_graph[my_id].add(peer_id)
-                        self.connection_graph[peer_id].add(my_id)
-                        
-                        # Track connections between peers if we have that info
-                        for other_peer_id, other_conn in session.peer_connections.items():
-                            if other_peer_id != peer_id and other_conn.connected:
-                                # Check if they're likely connected based on piece availability
-                                if peer_conn.peer_pieces and other_conn.peer_pieces:
-                                    # If peers have complementary pieces, they might be connected
-                                    if peer_conn.peer_pieces != other_conn.peer_pieces:
-                                        self.connection_graph[peer_id].add(other_peer_id)
+                        self.connection_graph[my_id].add(consistent_peer_id)
+                        self.connection_graph[consistent_peer_id].add(my_id)
         
         except Exception as e:
             logger.error(f"Error updating connection graph: {e}")
@@ -358,7 +450,7 @@ class EnhancedTrackerDataProvider:
         """Detect and record data transfers between peers."""
         current_time = time.time()
         
-        # Clear old transfers (older than 5 seconds for smoother animation)
+        # Clear old transfers
         self.data_transfers = [
             transfer for transfer in self.data_transfers
             if current_time - transfer['timestamp'] < 5.0
@@ -368,43 +460,42 @@ class EnhancedTrackerDataProvider:
             return
         
         try:
-            # EMPTY STATE FIX: Handle no sessions
             if not self.scheduler.sessions:
                 return
             
-            # Detect transfers based on peer connection states
             for info_hash, session in self.scheduler.sessions.items():
-                my_port = str(session.port)
+                my_id = f"127.0.0.1:{session.port}"
                 
                 for peer_id, peer_conn in session.peer_connections.items():
-                    # Detect downloads (we're downloading from peer)
+                    consistent_peer_id = f"{peer_conn.host}:{peer_conn.port}"
+                    
+                    # Detect downloads
                     if (peer_conn.connected and 
                         not peer_conn.peer_choking and 
                         peer_conn.am_interested and
                         hasattr(peer_conn, 'pending_requests') and
                         len(peer_conn.pending_requests) > 0):
                         
-                        # Calculate actual rate or use a visual indicator
-                        rate = getattr(peer_conn, 'download_rate', 16384)  # Default 16KB/s for visual
+                        rate = getattr(peer_conn, 'download_rate', 16384)
                         
                         self.data_transfers.append({
-                            'from': peer_id,
-                            'to': my_port,
+                            'from': consistent_peer_id,
+                            'to': my_id,
                             'type': 'download',
                             'rate': rate,
                             'timestamp': current_time
                         })
                     
-                    # Detect uploads (we're uploading to peer)
+                    # Detect uploads
                     if (peer_conn.connected and 
                         not peer_conn.am_choking and 
                         peer_conn.peer_interested):
                         
-                        rate = getattr(peer_conn, 'upload_rate', 16384)  # Default 16KB/s for visual
+                        rate = getattr(peer_conn, 'upload_rate', 16384)
                         
                         self.data_transfers.append({
-                            'from': my_port,
-                            'to': peer_id,
+                            'from': my_id,
+                            'to': consistent_peer_id,
                             'type': 'upload',
                             'rate': rate,
                             'timestamp': current_time
@@ -428,57 +519,14 @@ class EnhancedTrackerDataProvider:
         else:
             return "connected"
     
-    # API Endpoints
-    
+    # API endpoints (same as before, for local debugging)
     async def get_network_data(self, request):
         """Get complete network data for visualization."""
         try:
-            # Include local peer info
-            local_peers = {}
-            if self.scheduler and self.scheduler.sessions:
-                for session in self.scheduler.sessions.values():
-                    local_peer_id = str(session.port)
-                    local_peers[local_peer_id] = {
-                        'peer_id': local_peer_id,
-                        'host': '127.0.0.1',
-                        'port': session.port,
-                        'connection_time': time.time() - getattr(session, 'start_time', time.time()),
-                        'bytes_downloaded': session.total_downloaded,
-                        'bytes_uploaded': session.total_uploaded,
-                        'download_rate': session.download_rate,
-                        'upload_rate': session.upload_rate,
-                        'pieces_have': session.piece_manager.get_completed_count(),
-                        'pieces_need': len(session.piece_manager.pending_pieces),
-                        'status': 'seeding' if session.state.value == 'seeding' else 'downloading',
-                        'connected_to': list(self.connection_graph.get(local_peer_id, set())),
-                        'downloading_from': [],
-                        'uploading_to': []
-                    }
+            network_data = await self.prepare_network_data()
             
-            # EMPTY STATE FIX: If no peers or sessions, provide empty but valid data
-            if not local_peers and not self.peer_connections:
-                # Create a placeholder local peer
-                default_port = getattr(self.scheduler, 'listen_port', 6881) if self.scheduler else 6881
-                local_peer_id = str(default_port)
-                local_peers[local_peer_id] = {
-                    'peer_id': local_peer_id,
-                    'host': '127.0.0.1',
-                    'port': default_port,
-                    'connection_time': 0,
-                    'bytes_downloaded': 0,
-                    'bytes_uploaded': 0,
-                    'download_rate': 0,
-                    'upload_rate': 0,
-                    'pieces_have': 0,
-                    'pieces_need': 0,
-                    'status': 'waiting',
-                    'connected_to': [],
-                    'downloading_from': [],
-                    'uploading_to': []
-                }
-            
-            # Merge local peers with remote peers
-            all_peers = {**local_peers, **{pid: asdict(peer) for pid, peer in self.peer_connections.items()}}
+            # Merge local and remote peers
+            all_peers = {**network_data['local_peers'], **network_data['remote_peers']}
             
             data = {
                 'peers': all_peers,
@@ -492,8 +540,6 @@ class EnhancedTrackerDataProvider:
         
         except Exception as e:
             logger.error(f"Error getting network data: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return web.json_response({'error': str(e)}, status=500)
     
     async def get_peer_data(self, request):
@@ -503,9 +549,7 @@ class EnhancedTrackerDataProvider:
                 'peers': {pid: asdict(peer) for pid, peer in self.peer_connections.items()},
                 'timestamp': time.time()
             }
-            
             return web.json_response(data)
-        
         except Exception as e:
             logger.error(f"Error getting peer data: {e}")
             return web.json_response({'error': str(e)}, status=500)
@@ -517,9 +561,7 @@ class EnhancedTrackerDataProvider:
                 'torrents': {tid: asdict(torrent) for tid, torrent in self.torrent_statuses.items()},
                 'timestamp': time.time()
             }
-            
             return web.json_response(data)
-        
         except Exception as e:
             logger.error(f"Error getting torrent data: {e}")
             return web.json_response({'error': str(e)}, status=500)
@@ -531,9 +573,7 @@ class EnhancedTrackerDataProvider:
                 'connections': {pid: list(connections) for pid, connections in self.connection_graph.items()},
                 'timestamp': time.time()
             }
-            
             return web.json_response(data)
-        
         except Exception as e:
             logger.error(f"Error getting connection data: {e}")
             return web.json_response({'error': str(e)}, status=500)
@@ -545,15 +585,13 @@ class EnhancedTrackerDataProvider:
                 'transfers': self.data_transfers,
                 'timestamp': time.time()
             }
-            
             return web.json_response(data)
-        
         except Exception as e:
             logger.error(f"Error getting transfer data: {e}")
             return web.json_response({'error': str(e)}, status=500)
     
     async def get_enhanced_stats(self, request):
-        """Get enhanced statistics combining tracker and peer data."""
+        """Get enhanced statistics."""
         try:
             total_peers = len(self.peer_connections)
             active_transfers = len([t for t in self.data_transfers if time.time() - t['timestamp'] < 2.0])
@@ -563,11 +601,10 @@ class EnhancedTrackerDataProvider:
             # Add local peer rates
             if self.scheduler and self.scheduler.sessions:
                 for session in self.scheduler.sessions.values():
-                    total_download_rate += session.download_rate
-                    total_upload_rate += session.upload_rate
-                    total_peers += 1  # Count local peer
+                    total_download_rate += getattr(session, 'download_rate', 0)
+                    total_upload_rate += getattr(session, 'upload_rate', 0)
+                    total_peers += 1
             elif self.scheduler:
-                # EMPTY STATE FIX: Count the local peer even without sessions
                 total_peers += 1
             
             # Get tracker stats if available
@@ -592,6 +629,11 @@ class EnhancedTrackerDataProvider:
                     'total_pieces': sum(t.pieces_total for t in self.torrent_statuses.values()),
                     'completed_pieces': sum(t.pieces_completed for t in self.torrent_statuses.values())
                 },
+                'aggregator_info': {
+                    'aggregator_url': self.aggregator_url,
+                    'reporter_id': self.reporter_id,
+                    'reporting_enabled': self.aggregator_url is not None
+                },
                 'timestamp': time.time()
             }
             
@@ -601,160 +643,49 @@ class EnhancedTrackerDataProvider:
             logger.error(f"Error getting enhanced stats: {e}")
             return web.json_response({'error': str(e)}, status=500)
     
-    async def serve_visualizer(self, request):
-        """Serve the network visualizer HTML page."""
-        html_content = """
+    async def serve_local_info(self, request):
+        """Serve local information page."""
+        status = "🟢 Reporting to Central Aggregator" if self.aggregator_url else "🟡 Local Mode Only"
+        
+        html_content = f"""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>BitTorrent Network Visualizer</title>
+            <title>BitTorrent Data Provider - {self.reporter_id}</title>
             <style>
-                body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #222; color: white; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .header { text-align: center; margin-bottom: 30px; }
-                .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
-                .stat-card { background: #333; padding: 20px; border-radius: 8px; }
-                .stat-title { font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #4CAF50; }
-                .stat-value { font-size: 24px; font-weight: bold; }
-                .instructions { background: #333; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-                .launch-button { 
-                    background: #4CAF50; color: white; padding: 15px 30px; 
-                    border: none; border-radius: 5px; font-size: 16px; cursor: pointer;
-                    display: block; margin: 20px auto;
-                }
-                .launch-button:hover { background: #45a049; }
-                .status { color: #4CAF50; font-weight: bold; }
-                .status.waiting { color: #FFC107; }
+                body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #222; color: white; }}
+                .container {{ max-width: 800px; margin: 0 auto; }}
+                .header {{ text-align: center; margin-bottom: 30px; }}
+                .status {{ background: #333; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+                .info {{ background: #333; padding: 20px; border-radius: 8px; }}
             </style>
         </head>
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>BitTorrent Network Visualizer</h1>
-                    <p>Real-time visualization of peer connections and data flow</p>
-                    <p class="status" id="connection-status">Status: <span id="status-text">Connected</span></p>
+                    <h1>BitTorrent Data Provider</h1>
+                    <p>Reporter ID: <strong>{self.reporter_id}</strong></p>
                 </div>
                 
-                <div class="instructions">
-                    <h3>Setup Instructions</h3>
-                    <p>1. Make sure your BitTorrent tracker is running on port 8080</p>
-                    <p>2. Ensure you have pygame installed: <code>pip install pygame aiohttp</code></p>
-                    <p>3. Save the visualizer script and run it</p>
-                    <p>4. The visualizer will connect to this API endpoint automatically</p>
+                <div class="status">
+                    <h3>Status</h3>
+                    <p>{status}</p>
+                    <p>Local API: <strong>http://localhost:{self.api_port}</strong></p>
+                    {f'<p>Aggregator: <strong>{self.aggregator_url}</strong></p>' if self.aggregator_url else ''}
                 </div>
                 
-                <button class="launch-button" onclick="launchVisualizer()">
-                    Launch Pygame Visualizer
-                </button>
-                
-                <div class="stats" id="stats">
-                    <div class="stat-card">
-                        <div class="stat-title">API Status</div>
-                        <div class="stat-value" id="api-status">Running</div>
-                    </div>
+                <div class="info">
+                    <h3>Local API Endpoints</h3>
+                    <p>• GET /api/network - Network data</p>
+                    <p>• GET /api/peers - Peer data</p>
+                    <p>• GET /api/stats - Statistics</p>
                 </div>
             </div>
-            
-            <script>
-                function launchVisualizer() {
-                    alert('Please run the pygame visualizer script manually:\\n\\npython visualizer.py');
-                }
-                
-                async function updateStats() {
-                    try {
-                        const response = await fetch('/api/stats');
-                        const data = await response.json();
-                        
-                        const statsDiv = document.getElementById('stats');
-                        const statusText = document.getElementById('status-text');
-                        
-                        // Update connection status
-                        if (data.torrents.active_torrents === 0) {
-                            statusText.textContent = 'Waiting for torrents...';
-                            statusText.parentElement.className = 'status waiting';
-                        } else {
-                            statusText.textContent = 'Connected';
-                            statusText.parentElement.className = 'status';
-                        }
-                        
-                        statsDiv.innerHTML = `
-                            <div class="stat-card">
-                                <div class="stat-title">API Status</div>
-                                <div class="stat-value">Running</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-title">Total Peers</div>
-                                <div class="stat-value">${data.network.total_peers}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-title">Active Transfers</div>
-                                <div class="stat-value">${data.network.active_transfers}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-title">Download Rate</div>
-                                <div class="stat-value">${(data.network.total_download_rate / 1024).toFixed(1)} KB/s</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-title">Active Torrents</div>
-                                <div class="stat-value">${data.torrents.active_torrents}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-title">Total Connections</div>
-                                <div class="stat-value">${data.network.connection_count}</div>
-                            </div>
-                        `;
-                    } catch (error) {
-                        console.error('Error updating stats:', error);
-                        document.getElementById('status-text').textContent = 'Connection Error';
-                        document.getElementById('status-text').parentElement.className = 'status waiting';
-                    }
-                }
-                
-                // Update stats every 2 seconds
-                setInterval(updateStats, 2000);
-                updateStats();
-            </script>
         </body>
         </html>
         """
         
         return web.Response(text=html_content, content_type='text/html')
-
-# Integration function for existing BitTorrent application
-def integrate_with_bittorrent_app(app):
-    """
-    Integration function to add the data provider to existing BitTorrent application.
-    Call this from your main application after creating tracker and scheduler.
-    """
-    # Create enhanced data provider
-    data_provider = EnhancedTrackerDataProvider()
-    
-    # Set component references
-    data_provider.set_components(
-        tracker=getattr(app, 'tracker', None),
-        scheduler=getattr(app, 'scheduler', None),
-        peer_server=getattr(app, 'peer_server', None)
-    )
-    
-    # Start the data provider API
-    async def start_data_provider():
-        await data_provider.start()
-    
-    # Add to app's event loop
-    if hasattr(app, 'event_loop') and app.event_loop:
-        asyncio.run_coroutine_threadsafe(start_data_provider(), app.event_loop)
-    else:
-        # Run in separate thread
-        def run_data_provider():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(start_data_provider())
-            loop.run_forever()
-        
-        provider_thread = threading.Thread(target=run_data_provider, daemon=True)
-        provider_thread.start()
-    
-    return data_provider
 
 # Standalone mode for testing
 async def main():
@@ -767,7 +698,6 @@ async def main():
         await provider.start()
         print("Data provider started. Press Ctrl+C to stop.")
         
-        # Keep running
         while provider.running:
             await asyncio.sleep(1)
             
