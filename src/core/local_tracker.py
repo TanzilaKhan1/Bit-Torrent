@@ -86,7 +86,7 @@ class LocalTracker:
         self.app.router.add_get('/scrape', self._handle_scrape)
         self.app.router.add_get('/stats', self._handle_stats)
         self.app.router.add_get('/peers/{info_hash}', self._handle_peers)
-        
+        self.app.router.add_get('/visualizer/stats', self._handle_visualizer_stats)  
         # Background cleanup task
         self.cleanup_task = None
         
@@ -394,7 +394,45 @@ class LocalTracker:
                 
             except Exception as e:
                 logger.error(f"Error in peer cleanup: {e}")
-    
+
+
+    def get_detailed_stats(self):
+        """Get detailed statistics for visualization."""
+        stats = self.get_stats()
+        
+        # Add peer connection details
+        peer_details = {}
+        for info_hash, swarm in self.swarms.items():
+            peer_details[info_hash.hex()] = {
+                'peers': [
+                    {
+                        'peer_id': peer.peer_id.hex(),
+                        'host': peer.host,
+                        'port': peer.port,
+                        'uploaded': peer.uploaded,
+                        'downloaded': peer.downloaded,
+                        'left': peer.left,
+                        'is_seeder': peer.is_seeder(),
+                        'last_announce': peer.last_announce
+                    }
+                    for peer in swarm.get_active_peers()
+                ]
+            }
+        
+        stats['peer_details'] = peer_details
+        return stats
+
+    async def _handle_visualizer_stats(self, request: web.Request) -> web.Response:
+        """Handle enhanced stats request for visualizer."""
+        try:
+            stats = self.get_detailed_stats()
+            return web.json_response(stats)
+        except Exception as e:
+            logger.error(f"Error handling visualizer stats: {e}")
+            return web.json_response({'error': str(e)}, status=500)
+
+
+
     def get_stats(self) -> Dict:
         """Get tracker statistics."""
         return {
