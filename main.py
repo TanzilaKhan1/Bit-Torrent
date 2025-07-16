@@ -73,7 +73,7 @@ class BitTorrentApplication:
             
             self.aggregator_url = aggregator_url
             
-            self.data_provider = ComprehensiveTrackerDataProvider(
+            self.data_provider = EnhancedTrackerDataProvider(
                 tracker_port=8080,  # Your tracker port
                 api_port=api_port,
                 aggregator_url=aggregator_url  # Pass aggregator URL
