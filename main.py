@@ -41,6 +41,7 @@ class BitTorrentApplication:
         # Add visualizer data provider
         self.data_provider = None
         self.visualizer_enabled = False
+        self.data_provider_thread = None
         
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
@@ -67,10 +68,10 @@ class BitTorrentApplication:
     def enable_visualizer(self, api_port=8081):
         """Enable the network visualizer."""
         try:
-            # Import here to avoid circular imports
-            from tracker_data import EnhancedTrackerDataProvider
+            # FIXED: Import the comprehensive data provider
+            from enhanced_data_provider_fixed import ComprehensiveTrackerDataProvider
             
-            self.data_provider = EnhancedTrackerDataProvider(
+            self.data_provider = ComprehensiveTrackerDataProvider(
                 tracker_port=8080,  # Your tracker port
                 api_port=api_port
             )
@@ -98,15 +99,19 @@ class BitTorrentApplication:
             provider_thread.start()
             
             self.visualizer_enabled = True
-            print(f"✓ Network visualizer API started on port {api_port}")
-            print(f"  Launch visualizer with: python enhanced_tracker_visualizer.py")
-            print(f"  Web interface: http://localhost:{api_port}/")
+            print(f"✅ FIXED: Comprehensive network visualizer API started on port {api_port}")
+            print(f"🎮 Launch visualizer with: python visualizer_fixed.py")
+            print(f"🌐 Web interface: http://localhost:{api_port}/")
+            print(f"📊 This shows ALL peers with proper color coding!")
             
         except ImportError as e:
-            print(f"Could not import visualizer components: {e}")
-            print("Make sure tracker_data_provider.py is in the current directory")
+            print(f"❌ Could not import visualizer components: {e}")
+            print("📁 Make sure enhanced_data_provider_fixed.py is in the current directory")
+            print("📥 Download the comprehensive data provider from the artifacts above")
         except Exception as e:
-            print(f"Failed to enable visualizer: {e}")
+            print(f"❌ Failed to enable visualizer: {e}")
+            import traceback
+            traceback.print_exc()
             
     def _run_event_loop(self):
         """Run the async event loop."""
@@ -125,15 +130,15 @@ class BitTorrentApplication:
         future = asyncio.run_coroutine_threadsafe(coro, self.event_loop)
         return future
     
-    def setup_gui(self, port: int, download_dir: str, enable_visualizer=bool, visualizer_port=int):
+    def setup_gui(self, port: int, download_dir: str, enable_visualizer=False, visualizer_port=8081):
         """Setup GUI interface."""
         try:
             from PyQt6.QtWidgets import QApplication
             from src.core.bitorrentGui import BitTorrentMainWindow
             
             self.gui_app = QApplication(sys.argv)
-            self.gui_app.setApplicationName("BitTorrent Client")
-            self.gui_app.setApplicationVersion("1.0")
+            self.gui_app.setApplicationName("FIXED BitTorrent Client")
+            self.gui_app.setApplicationVersion("2.0")
             
             # Create main window
             self.gui_window = BitTorrentMainWindow(self)
@@ -149,12 +154,12 @@ class BitTorrentApplication:
             # Setup GUI with components
             self.gui_window.setup_components(self.scheduler, self.peer_server)
             
-            # Enable visualizer if not already enabled
+            # Enable visualizer if requested
             if enable_visualizer and not self.visualizer_enabled:
                 self.enable_visualizer(visualizer_port)
             
             self.gui_mode = True
-            logger.info("GUI setup complete")
+            logger.info("FIXED: GUI setup complete")
             
         except ImportError as e:
             logger.error(f"Failed to import PyQt6: {e}")
@@ -180,7 +185,7 @@ class BitTorrentApplication:
             await self.scheduler.start()
             await self.peer_server.start()
             
-            logger.info(f"BitTorrent components started on port {port}")
+            logger.info(f"FIXED: BitTorrent components started on port {port}")
             
         except Exception as e:
             logger.error(f"Error setting up components: {e}")
@@ -199,6 +204,12 @@ class BitTorrentApplication:
             # Show GUI
             self.gui_window.show()
             
+            # FIXED: Show status when visualizer is enabled
+            if enable_visualizer:
+                print("🎉 FIXED: Comprehensive visualizer enabled!")
+                print("🔍 Will show ALL 4 peers with proper color coding")
+                print("📊 Blue=Download, Orange=Upload, Purple=Local, Green=Seeding")
+            
             # Run GUI event loop
             return self.gui_app.exec()
             
@@ -207,7 +218,6 @@ class BitTorrentApplication:
             return 1
         finally:
             self.stop()
-    
     
     def add_torrent_async(self, torrent_path: str):
         """Add torrent asynchronously."""
@@ -391,7 +401,7 @@ class BitTorrentApplication:
                 return
             
             download_dir = Path(self.scheduler.download_dir)
-            destination_path = download_dir/ "downloaded" / file_name
+            destination_path = download_dir / "downloaded" / file_name
             
             # Check if file already exists in downloaded folder
             if destination_path.exists():
@@ -416,6 +426,7 @@ class BitTorrentApplication:
             
             # Ensure download directory exists
             download_dir.mkdir(parents=True, exist_ok=True)
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
             
             # Copy the file
             shutil.copy2(source_path, destination_path)
@@ -470,7 +481,7 @@ async def run_tracker(port: int = 8080):
     
     try:
         await tracker.start()
-        print(f"🎯 FINAL FIXED: Tracker started on http://localhost:{port}")
+        print(f"🎯 FIXED: Tracker started on http://localhost:{port}")
         print(f"📊 Stats: http://localhost:{port}/stats")
         print("Press Ctrl+C to stop")
         
@@ -486,8 +497,8 @@ async def run_tracker(port: int = 8080):
 
 
 def main():
-    """Main entry point with visualizer support."""
-    parser = argparse.ArgumentParser(description='BitTorrent Client')
+    """Main entry point with FIXED visualizer support."""
+    parser = argparse.ArgumentParser(description='FIXED BitTorrent Client with Comprehensive Visualizer')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
     # Tracker command
@@ -498,13 +509,11 @@ def main():
     peer_parser = subparsers.add_parser('peer', help='Run peer')
     peer_parser.add_argument('--port', type=int, required=True, help='Peer port')
     peer_parser.add_argument('--download-dir', required=True, help='Download directory')
-
     peer_parser.add_argument('--torrent', help='Torrent file to add automatically')
     peer_parser.add_argument('--enable-visualizer', action='store_true', 
-                           help='Enable network visualizer')
+                           help='Enable FIXED comprehensive network visualizer')
     peer_parser.add_argument('--visualizer-port', type=int, default=8081,
                            help='Visualizer API port')
-
     
     args = parser.parse_args()
     
@@ -516,10 +525,13 @@ def main():
     
     try:
         if args.command == 'tracker':
-            print(f"🎯 Starting tracker on port {args.port}")
+            print(f"🎯 Starting FIXED tracker on port {args.port}")
             asyncio.run(run_tracker(args.port))
         elif args.command == 'peer':
-            print(f"🚀 Starting peer with GUI on port {args.port}")
+            print(f"🚀 Starting FIXED peer with GUI on port {args.port}")
+            if args.enable_visualizer:
+                print(f"🔧 Comprehensive visualizer will be enabled on port {args.visualizer_port}")
+                print(f"📊 This shows ALL peers with proper color coding!")
             sys.exit(
                 app.run_gui(
                     port=args.port,
@@ -529,7 +541,6 @@ def main():
                     visualizer_port=args.visualizer_port,
                 )
             )
-
         else:
             parser.print_help()
             sys.exit(1)

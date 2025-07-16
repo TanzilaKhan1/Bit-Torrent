@@ -2,14 +2,6 @@
 
 #Bit-Torrent/src/core/bit_torrent_peer.py
 
-"""
-FINAL FIXED: BitTorrent Client with Working Piece Transfer
-=========================================================
-
-All components now properly fixed for actual file transfer.
-"""
-
-
 
 import asyncio
 from pathlib import Path
@@ -22,7 +14,6 @@ logger = get_logger(__name__)
 
 
 class FinalFixedBitTorrentPeer:
-    """FINAL FIXED: BitTorrent peer with working file transfer."""
     
     def __init__(self, port: int, download_dir: str, tracker_url: str = "http://localhost:8080/announce"):
         self.port = port
@@ -37,6 +28,7 @@ class FinalFixedBitTorrentPeer:
         # State
         self.running = False
         self.shutdown_event = asyncio.Event()
+        self.visualizer_update_task = None
         
         # Create download directory
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -64,7 +56,13 @@ class FinalFixedBitTorrentPeer:
             await self.visualizer.start()
             
             self.running = True
-            logger.info(f"✅ FINAL FIXED: Peer started successfully on port {self.port}")
+            
+            # VISUALIZER FIX: Always start the visualizer update loop when peer starts
+            if not self.visualizer_update_task:
+                logger.info("🔄 Starting visualizer update loop...")
+                self.visualizer_update_task = asyncio.create_task(self._update_visualizer_loop())
+            
+            logger.info(f"✅  Peer started successfully on port {self.port}")
             
         except Exception as e:
             logger.error(f"Failed to start peer: {e}")
@@ -76,16 +74,21 @@ class FinalFixedBitTorrentPeer:
         if not self.running:
             return
         
-        logger.info("🛑 FINAL FIXED: Stopping peer...")
+        logger.info("🛑 Stopping peer...")
         
         self.running = False
         self.shutdown_event.set()
+        
+        # Cancel visualizer update task
+        if self.visualizer_update_task:
+            self.visualizer_update_task.cancel()
+            self.visualizer_update_task = None
         
         await self.visualizer.stop()
         await self.scheduler.stop()
         await self.peer_server.stop()
         
-        logger.info("✅ FINAL FIXED: Peer stopped")
+        logger.info("✅ Peer stopped")
     
     async def add_torrent(self, torrent_path: str) -> bool:
         """Add a torrent file."""
@@ -110,28 +113,50 @@ class FinalFixedBitTorrentPeer:
                 print("torrent already added")
                 return False
         
-        logger.info(f"📋 FINAL FIXED: Adding torrent: {torrent_path}")
+        logger.info(f"📋  Adding torrent: {torrent_path}")
         success = await self.scheduler.add_torrent_file(torrent_path)
         
         if success:
             logger.info(f"✅ Successfully added torrent: {torrent_path}")
-            # Start visualizer update loop
-            asyncio.create_task(self._update_visualizer_loop())
+            # VISUALIZER FIX: No need to start update loop here as it's already running
         else:
             logger.error(f"❌ Failed to add torrent: {torrent_path}")
         
         return success
     
     async def _update_visualizer_loop(self):
-        """FINAL FIXED: Update visualizer with accurate statistics."""
+        """ Update visualizer with accurate statistics."""
         while self.running:
             try:
                 sessions = self.scheduler.get_all_sessions()
                 
-                for session_data in sessions:
-                    # Convert session data to visual info with FIXED statistics
-                    torrent_info = self._session_to_visual_info(session_data)
-                    self.visualizer.update_torrent(torrent_info)
+                # VISUALIZER FIX: Show empty state when no torrents
+                if not sessions:
+                    # Create empty torrent info to show "No torrents" state
+                    empty_torrent = TorrentVisualInfo(
+                        info_hash="0" * 40,
+                        name="No torrents active",
+                        total_size=0,
+                        downloaded=0,
+                        uploaded=0,
+                        progress=0.0,
+                        download_rate=0.0,
+                        upload_rate=0.0,
+                        peers=[],
+                        pieces_completed=0,
+                        pieces_total=0,
+                        status="waiting",
+                        seeded_files=None,
+                        downloaded_files=None,
+                        storage_type="standard"
+                    )
+                    self.visualizer.update_torrent(empty_torrent)
+                else:
+                    # Update with actual torrent data
+                    for session_data in sessions:
+                        # Convert session data to visual info with FIXED statistics
+                        torrent_info = self._session_to_visual_info(session_data)
+                        self.visualizer.update_torrent(torrent_info)
                 
                 await asyncio.sleep(1.0)  # Update every second
                 
@@ -228,6 +253,3 @@ class FinalFixedBitTorrentPeer:
         """Trigger recheck of seeded files for all torrents."""
         for session in self.scheduler.torrent_sessions.values():
             await session.storage.recheck_seeded_files()
-
-
-

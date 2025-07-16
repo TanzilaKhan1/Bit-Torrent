@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
 
-"""
-Tracker Data Provider - Integration with existing BitTorrent implementation
-Provides real-time data for the network visualizer
-"""
 
 import asyncio
 import json
@@ -17,7 +13,6 @@ import sys
 import os
 from collections import defaultdict
 
-# Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 try:
@@ -187,6 +182,11 @@ class EnhancedTrackerDataProvider:
             # Clear old peer connections first
             self.peer_connections.clear()
             
+            # EMPTY STATE FIX: Handle case where there are no sessions
+            if not self.scheduler.sessions:
+                logger.debug("No active torrent sessions")
+                return
+            
             for info_hash, session in self.scheduler.sessions.items():
                 for peer_id, conn in session.peer_connections.items():
                     # Get connection statistics
@@ -280,6 +280,14 @@ class EnhancedTrackerDataProvider:
             return
         
         try:
+            # EMPTY STATE FIX: Clear old statuses
+            self.torrent_statuses.clear()
+            
+            # Handle empty state
+            if not self.scheduler.sessions:
+                logger.debug("No active torrent sessions for status update")
+                return
+            
             for info_hash, session in self.scheduler.sessions.items():
                 stats = session.get_stats()
                 
@@ -320,6 +328,10 @@ class EnhancedTrackerDataProvider:
             return
         
         try:
+            # EMPTY STATE FIX: Handle no sessions
+            if not self.scheduler.sessions:
+                return
+            
             # Build connection graph from actual peer connections
             for info_hash, session in self.scheduler.sessions.items():
                 # For each peer in the session
@@ -356,6 +368,10 @@ class EnhancedTrackerDataProvider:
             return
         
         try:
+            # EMPTY STATE FIX: Handle no sessions
+            if not self.scheduler.sessions:
+                return
+            
             # Detect transfers based on peer connection states
             for info_hash, session in self.scheduler.sessions.items():
                 my_port = str(session.port)
@@ -419,7 +435,7 @@ class EnhancedTrackerDataProvider:
         try:
             # Include local peer info
             local_peers = {}
-            if self.scheduler:
+            if self.scheduler and self.scheduler.sessions:
                 for session in self.scheduler.sessions.values():
                     local_peer_id = str(session.port)
                     local_peers[local_peer_id] = {
@@ -438,6 +454,28 @@ class EnhancedTrackerDataProvider:
                         'downloading_from': [],
                         'uploading_to': []
                     }
+            
+            # EMPTY STATE FIX: If no peers or sessions, provide empty but valid data
+            if not local_peers and not self.peer_connections:
+                # Create a placeholder local peer
+                default_port = getattr(self.scheduler, 'listen_port', 6881) if self.scheduler else 6881
+                local_peer_id = str(default_port)
+                local_peers[local_peer_id] = {
+                    'peer_id': local_peer_id,
+                    'host': '127.0.0.1',
+                    'port': default_port,
+                    'connection_time': 0,
+                    'bytes_downloaded': 0,
+                    'bytes_uploaded': 0,
+                    'download_rate': 0,
+                    'upload_rate': 0,
+                    'pieces_have': 0,
+                    'pieces_need': 0,
+                    'status': 'waiting',
+                    'connected_to': [],
+                    'downloading_from': [],
+                    'uploading_to': []
+                }
             
             # Merge local peers with remote peers
             all_peers = {**local_peers, **{pid: asdict(peer) for pid, peer in self.peer_connections.items()}}
@@ -523,11 +561,14 @@ class EnhancedTrackerDataProvider:
             total_upload_rate = sum(peer.upload_rate for peer in self.peer_connections.values())
             
             # Add local peer rates
-            if self.scheduler:
+            if self.scheduler and self.scheduler.sessions:
                 for session in self.scheduler.sessions.values():
                     total_download_rate += session.download_rate
                     total_upload_rate += session.upload_rate
                     total_peers += 1  # Count local peer
+            elif self.scheduler:
+                # EMPTY STATE FIX: Count the local peer even without sessions
+                total_peers += 1
             
             # Get tracker stats if available
             tracker_stats = {}
@@ -582,6 +623,8 @@ class EnhancedTrackerDataProvider:
                     display: block; margin: 20px auto;
                 }
                 .launch-button:hover { background: #45a049; }
+                .status { color: #4CAF50; font-weight: bold; }
+                .status.waiting { color: #FFC107; }
             </style>
         </head>
         <body>
@@ -589,6 +632,7 @@ class EnhancedTrackerDataProvider:
                 <div class="header">
                     <h1>BitTorrent Network Visualizer</h1>
                     <p>Real-time visualization of peer connections and data flow</p>
+                    <p class="status" id="connection-status">Status: <span id="status-text">Connected</span></p>
                 </div>
                 
                 <div class="instructions">
@@ -613,7 +657,7 @@ class EnhancedTrackerDataProvider:
             
             <script>
                 function launchVisualizer() {
-                    alert('Please run the pygame visualizer script manually:\\n\\npython enhanced_tracker_visualizer.py');
+                    alert('Please run the pygame visualizer script manually:\\n\\npython visualizer.py');
                 }
                 
                 async function updateStats() {
@@ -622,6 +666,17 @@ class EnhancedTrackerDataProvider:
                         const data = await response.json();
                         
                         const statsDiv = document.getElementById('stats');
+                        const statusText = document.getElementById('status-text');
+                        
+                        // Update connection status
+                        if (data.torrents.active_torrents === 0) {
+                            statusText.textContent = 'Waiting for torrents...';
+                            statusText.parentElement.className = 'status waiting';
+                        } else {
+                            statusText.textContent = 'Connected';
+                            statusText.parentElement.className = 'status';
+                        }
+                        
                         statsDiv.innerHTML = `
                             <div class="stat-card">
                                 <div class="stat-title">API Status</div>
@@ -639,14 +694,24 @@ class EnhancedTrackerDataProvider:
                                 <div class="stat-title">Download Rate</div>
                                 <div class="stat-value">${(data.network.total_download_rate / 1024).toFixed(1)} KB/s</div>
                             </div>
+                            <div class="stat-card">
+                                <div class="stat-title">Active Torrents</div>
+                                <div class="stat-value">${data.torrents.active_torrents}</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-title">Total Connections</div>
+                                <div class="stat-value">${data.network.connection_count}</div>
+                            </div>
                         `;
                     } catch (error) {
                         console.error('Error updating stats:', error);
+                        document.getElementById('status-text').textContent = 'Connection Error';
+                        document.getElementById('status-text').parentElement.className = 'status waiting';
                     }
                 }
                 
-                // Update stats every 5 seconds
-                setInterval(updateStats, 5000);
+                // Update stats every 2 seconds
+                setInterval(updateStats, 2000);
                 updateStats();
             </script>
         </body>

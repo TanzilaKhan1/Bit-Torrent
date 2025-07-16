@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Enhanced BitTorrent Tracker Network Visualizer
+Enhanced BitTorrent Tracker Network Visualizer with Resizable Window
 Connects to the tracker data provider API for real-time data
-macOS compatible with proper threading
+macOS compatible with proper threading and resizable window support
 """
 
 import pygame
@@ -24,9 +24,11 @@ import sys
 # Initialize pygame
 pygame.init()
 
-# Constants
-WINDOW_WIDTH = 1600
-WINDOW_HEIGHT = 1000
+# Initial window dimensions
+INITIAL_WIDTH = 1600
+INITIAL_HEIGHT = 1000
+MIN_WIDTH = 800
+MIN_HEIGHT = 600
 FPS = 60
 
 # Colors
@@ -207,11 +209,17 @@ class EnhancedNetworkDataCollector:
             await self.session.close()
 
 class EnhancedNetworkVisualizer:
-    """Enhanced network visualizer with API integration."""
+    """Enhanced network visualizer with API integration and resizable window."""
     
     def __init__(self):
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        pygame.display.set_caption("Enhanced BitTorrent Network Visualizer")
+        # Initialize with resizable window
+        self.window_width = INITIAL_WIDTH
+        self.window_height = INITIAL_HEIGHT
+        self.screen = pygame.display.set_mode(
+            (self.window_width, self.window_height), 
+            pygame.RESIZABLE
+        )
+        pygame.display.set_caption("Enhanced BitTorrent Network Visualizer (Resizable)")
         self.clock = pygame.time.Clock()
         
         # Fonts
@@ -251,12 +259,70 @@ class EnhancedNetworkVisualizer:
         self.camera_y = 0
         self.zoom = 1.0
         
-        # Layout
-        self.layout_center_x = WINDOW_WIDTH // 2
-        self.layout_center_y = WINDOW_HEIGHT // 2
-        self.layout_radius = 200
+        # Layout (will be updated on resize)
+        self.update_layout_parameters()
         
-        print("Enhanced Network Visualizer initialized")
+        print("Enhanced Network Visualizer initialized with resizable window")
+    
+    def update_layout_parameters(self):
+        """Update layout parameters based on current window size."""
+        self.layout_center_x = self.window_width // 2
+        self.layout_center_y = self.window_height // 2
+        self.layout_radius = min(self.window_width, self.window_height) // 4
+        
+        # Update background particles count based on window size
+        particle_density = (self.window_width * self.window_height) // 32000
+        target_particles = max(20, min(100, particle_density))
+        
+        # Adjust particle count
+        current_particles = len(self.background_particles)
+        if current_particles < target_particles:
+            for _ in range(target_particles - current_particles):
+                self.add_background_particle()
+        elif current_particles > target_particles:
+            self.background_particles = self.background_particles[:target_particles]
+    
+    def handle_window_resize(self, new_size):
+        """Handle window resize event."""
+        old_width, old_height = self.window_width, self.window_height
+        self.window_width, self.window_height = new_size
+        
+        # Ensure minimum size
+        self.window_width = max(MIN_WIDTH, self.window_width)
+        self.window_height = max(MIN_HEIGHT, self.window_height)
+        
+        # Update display
+        self.screen = pygame.display.set_mode(
+            (self.window_width, self.window_height), 
+            pygame.RESIZABLE
+        )
+        
+        # Scale factor for existing peer positions
+        scale_x = self.window_width / old_width if old_width > 0 else 1.0
+        scale_y = self.window_height / old_height if old_height > 0 else 1.0
+        
+        # Update peer positions
+        for peer in self.peers.values():
+            peer.x *= scale_x
+            peer.y *= scale_y
+            peer.target_x *= scale_x
+            peer.target_y *= scale_y
+        
+        # Update layout parameters
+        self.update_layout_parameters()
+        
+        print(f"Window resized to {self.window_width}x{self.window_height}")
+    
+    def add_background_particle(self):
+        """Add a single background particle."""
+        self.background_particles.append({
+            'x': random.uniform(0, self.window_width),
+            'y': random.uniform(0, self.window_height),
+            'vx': random.uniform(-20, 20),
+            'vy': random.uniform(-20, 20),
+            'life': random.uniform(0.1, 0.3),
+            'max_life': random.uniform(0.1, 0.3)
+        })
     
     def start(self):
         """Start the enhanced visualizer."""
@@ -269,8 +335,10 @@ class EnhancedNetworkVisualizer:
         print("  P - Toggle physics")
         print("  A - Toggle auto layout")
         print("  R - Reset layout")
+        print("  F - Toggle fullscreen")
         print("  Mouse - Click and drag peers")
         print("  Scroll - Zoom in/out")
+        print("  Resize - Drag window edges to resize")
         
         # Start data collection in background thread
         self.data_thread = threading.Thread(
@@ -305,6 +373,8 @@ class EnhancedNetworkVisualizer:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+                elif event.type == pygame.VIDEORESIZE:
+                    self.handle_window_resize((event.w, event.h))
                 elif event.type == pygame.KEYDOWN:
                     self.handle_keypress(event.key)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -509,10 +579,10 @@ class EnhancedNetworkVisualizer:
             peer.x += peer.vx * dt
             peer.y += peer.vy * dt
             
-            # Boundary constraints
+            # Boundary constraints (use current window size)
             margin = 50
-            peer.x = max(margin, min(WINDOW_WIDTH - margin, peer.x))
-            peer.y = max(margin, min(WINDOW_HEIGHT - margin, peer.y))
+            peer.x = max(margin, min(self.window_width - margin, peer.x))
+            peer.y = max(margin, min(self.window_height - margin, peer.y))
     
     def update_animations(self, dt):
         """Update visual animations."""
@@ -539,8 +609,8 @@ class EnhancedNetworkVisualizer:
         if peer_count == 0:
             return
         
-        # Circular layout
-        radius = max(150, min(300, peer_count * 20))
+        # Circular layout adapted to current window size
+        radius = max(150, min(self.layout_radius, peer_count * 20))
         angle_step = 2 * math.pi / peer_count
         
         for i, peer in enumerate(self.peers.values()):
@@ -550,15 +620,12 @@ class EnhancedNetworkVisualizer:
     
     def init_background_effects(self):
         """Initialize background visual effects."""
-        for _ in range(50):
-            self.background_particles.append({
-                'x': random.uniform(0, WINDOW_WIDTH),
-                'y': random.uniform(0, WINDOW_HEIGHT),
-                'vx': random.uniform(-20, 20),
-                'vy': random.uniform(-20, 20),
-                'life': random.uniform(0.1, 0.3),
-                'max_life': random.uniform(0.1, 0.3)
-            })
+        self.background_particles.clear()
+        particle_count = (self.window_width * self.window_height) // 32000
+        particle_count = max(20, min(100, particle_count))
+        
+        for _ in range(particle_count):
+            self.add_background_particle()
     
     def update_background_particles(self, dt):
         """Update background particle effects."""
@@ -566,15 +633,15 @@ class EnhancedNetworkVisualizer:
             particle['x'] += particle['vx'] * dt
             particle['y'] += particle['vy'] * dt
             
-            # Wrap around screen
+            # Wrap around screen (use current window size)
             if particle['x'] < 0:
-                particle['x'] = WINDOW_WIDTH
-            elif particle['x'] > WINDOW_WIDTH:
+                particle['x'] = self.window_width
+            elif particle['x'] > self.window_width:
                 particle['x'] = 0
             
             if particle['y'] < 0:
-                particle['y'] = WINDOW_HEIGHT
-            elif particle['y'] > WINDOW_HEIGHT:
+                particle['y'] = self.window_height
+            elif particle['y'] > self.window_height:
                 particle['y'] = 0
     
     def update_transfer_particles(self, dt):
@@ -690,132 +757,132 @@ class EnhancedNetworkVisualizer:
                 self.screen.blit(text, text_rect)
     
     def render_connections(self):
-            """Render connections between peers with improved visualization."""
-            rendered_connections = set()  # Avoid rendering duplicate connections
-            
-            for peer_id, connected_peers in self.connections.items():
-                if peer_id not in self.peers:
-                    continue
-                    
-                peer = self.peers[peer_id]
+        """Render connections between peers with improved visualization."""
+        rendered_connections = set()  # Avoid rendering duplicate connections
+        
+        for peer_id, connected_peers in self.connections.items():
+            if peer_id not in self.peers:
+                continue
                 
-                for connected_id in connected_peers:
-                    if connected_id not in self.peers:
-                        continue
+            peer = self.peers[peer_id]
+            
+            for connected_id in connected_peers:
+                if connected_id not in self.peers:
+                    continue
+                
+                # Skip if we've already rendered this connection
+                connection_key = tuple(sorted([peer_id, connected_id]))
+                if connection_key in rendered_connections:
+                    continue
+                rendered_connections.add(connection_key)
                     
-                    # Skip if we've already rendered this connection
-                    connection_key = tuple(sorted([peer_id, connected_id]))
-                    if connection_key in rendered_connections:
-                        continue
-                    rendered_connections.add(connection_key)
-                        
-                    other = self.peers[connected_id]
-                    
-                    # Check if there's an active transfer between these peers
-                    is_transferring = False
-                    transfer_direction = None
-                    
-                    for transfer in self.transfers:
-                        if (transfer.from_peer == peer_id and transfer.to_peer == connected_id):
-                            is_transferring = True
-                            transfer_direction = 'upload'
-                            break
-                        elif (transfer.from_peer == connected_id and transfer.to_peer == peer_id):
-                            is_transferring = True
-                            transfer_direction = 'download'
-                            break
-                    
-                    # Determine connection color and style
-                    if is_transferring:
-                        if transfer_direction == 'upload':
-                            color = ORANGE
-                            width = 4
-                        else:
-                            color = BLUE
-                            width = 4
+                other = self.peers[connected_id]
+                
+                # Check if there's an active transfer between these peers
+                is_transferring = False
+                transfer_direction = None
+                
+                for transfer in self.transfers:
+                    if (transfer.from_peer == peer_id and transfer.to_peer == connected_id):
+                        is_transferring = True
+                        transfer_direction = 'upload'
+                        break
+                    elif (transfer.from_peer == connected_id and transfer.to_peer == peer_id):
+                        is_transferring = True
+                        transfer_direction = 'download'
+                        break
+                
+                # Determine connection color and style
+                if is_transferring:
+                    if transfer_direction == 'upload':
+                        color = ORANGE
+                        width = 4
                     else:
-                        # Check peer states for potential transfers
-                        if peer.status == "uploading" and other.status == "downloading":
-                            color = ORANGE
-                            width = 2
-                        elif peer.status == "downloading" and other.status == "uploading":
-                            color = BLUE
-                            width = 2
-                        else:
-                            color = GRAY
-                            width = 1
-                    
-                    # Draw connection line
-                    start_pos = (int(peer.x), int(peer.y))
-                    end_pos = (int(other.x), int(other.y))
-                    
-                    # Calculate distance
-                    dx = end_pos[0] - start_pos[0]
-                    dy = end_pos[1] - start_pos[1]
-                    distance = math.sqrt(dx*dx + dy*dy)
-                    
-                    if distance > 0:
-                        # Draw gradient line
-                        if is_transferring:
-                            # Animated dashed line for active transfers
-                            dash_length = 10
-                            gap_length = 5
-                            offset = (time.time() * 50) % (dash_length + gap_length)
+                        color = BLUE
+                        width = 4
+                else:
+                    # Check peer states for potential transfers
+                    if peer.status == "uploading" and other.status == "downloading":
+                        color = ORANGE
+                        width = 2
+                    elif peer.status == "downloading" and other.status == "uploading":
+                        color = BLUE
+                        width = 2
+                    else:
+                        color = GRAY
+                        width = 1
+                
+                # Draw connection line
+                start_pos = (int(peer.x), int(peer.y))
+                end_pos = (int(other.x), int(other.y))
+                
+                # Calculate distance
+                dx = end_pos[0] - start_pos[0]
+                dy = end_pos[1] - start_pos[1]
+                distance = math.sqrt(dx*dx + dy*dy)
+                
+                if distance > 0:
+                    # Draw gradient line
+                    if is_transferring:
+                        # Animated dashed line for active transfers
+                        dash_length = 10
+                        gap_length = 5
+                        offset = (time.time() * 50) % (dash_length + gap_length)
+                        
+                        num_dashes = int(distance / (dash_length + gap_length))
+                        for i in range(num_dashes + 1):
+                            start_t = (i * (dash_length + gap_length) + offset) / distance
+                            end_t = ((i * (dash_length + gap_length) + offset + dash_length)) / distance
                             
-                            num_dashes = int(distance / (dash_length + gap_length))
-                            for i in range(num_dashes + 1):
-                                start_t = (i * (dash_length + gap_length) + offset) / distance
-                                end_t = ((i * (dash_length + gap_length) + offset + dash_length)) / distance
+                            if start_t < 1.0 and end_t > 0.0:
+                                start_t = max(0.0, start_t)
+                                end_t = min(1.0, end_t)
                                 
-                                if start_t < 1.0 and end_t > 0.0:
-                                    start_t = max(0.0, start_t)
-                                    end_t = min(1.0, end_t)
-                                    
-                                    dash_start_x = start_pos[0] + dx * start_t
-                                    dash_start_y = start_pos[1] + dy * start_t
-                                    dash_end_x = start_pos[0] + dx * end_t
-                                    dash_end_y = start_pos[1] + dy * end_t
-                                    
-                                    pygame.draw.line(self.screen, color, 
-                                                (dash_start_x, dash_start_y), 
-                                                (dash_end_x, dash_end_y), width)
+                                dash_start_x = start_pos[0] + dx * start_t
+                                dash_start_y = start_pos[1] + dy * start_t
+                                dash_end_x = start_pos[0] + dx * end_t
+                                dash_end_y = start_pos[1] + dy * end_t
+                                
+                                pygame.draw.line(self.screen, color, 
+                                            (dash_start_x, dash_start_y), 
+                                            (dash_end_x, dash_end_y), width)
+                    else:
+                        # Solid line for connections
+                        pygame.draw.line(self.screen, color, start_pos, end_pos, width)
+                        
+                    # Draw arrowhead for direction
+                    if is_transferring and distance > 50:
+                        # Calculate arrowhead position (middle of line)
+                        mid_x = (start_pos[0] + end_pos[0]) / 2
+                        mid_y = (start_pos[1] + end_pos[1]) / 2
+                        
+                        # Arrowhead direction
+                        if transfer_direction == 'upload':
+                            arrow_dx = dx / distance
+                            arrow_dy = dy / distance
                         else:
-                            # Solid line for connections
-                            pygame.draw.line(self.screen, color, start_pos, end_pos, width)
-                            
-                        # Draw arrowhead for direction
-                        if is_transferring and distance > 50:
-                            # Calculate arrowhead position (middle of line)
-                            mid_x = (start_pos[0] + end_pos[0]) / 2
-                            mid_y = (start_pos[1] + end_pos[1]) / 2
-                            
-                            # Arrowhead direction
-                            if transfer_direction == 'upload':
-                                arrow_dx = dx / distance
-                                arrow_dy = dy / distance
-                            else:
-                                arrow_dx = -dx / distance
-                                arrow_dy = -dy / distance
-                            
-                            # Draw arrowhead
-                            arrow_size = 10
-                            arrow_angle = 0.5
-                            
-                            # Calculate arrow points
-                            arrow_tip_x = mid_x + arrow_dx * arrow_size
-                            arrow_tip_y = mid_y + arrow_dy * arrow_size
-                            
-                            left_x = mid_x - arrow_dx * arrow_size + arrow_dy * arrow_size * arrow_angle
-                            left_y = mid_y - arrow_dy * arrow_size - arrow_dx * arrow_size * arrow_angle
-                            
-                            right_x = mid_x - arrow_dx * arrow_size - arrow_dy * arrow_size * arrow_angle
-                            right_y = mid_y - arrow_dy * arrow_size + arrow_dx * arrow_size * arrow_angle
-                            
-                            pygame.draw.polygon(self.screen, color, [
-                                (arrow_tip_x, arrow_tip_y),
-                                (left_x, left_y),
-                                (right_x, right_y)
-                            ])
+                            arrow_dx = -dx / distance
+                            arrow_dy = -dy / distance
+                        
+                        # Draw arrowhead
+                        arrow_size = 10
+                        arrow_angle = 0.5
+                        
+                        # Calculate arrow points
+                        arrow_tip_x = mid_x + arrow_dx * arrow_size
+                        arrow_tip_y = mid_y + arrow_dy * arrow_size
+                        
+                        left_x = mid_x - arrow_dx * arrow_size + arrow_dy * arrow_size * arrow_angle
+                        left_y = mid_y - arrow_dy * arrow_size - arrow_dx * arrow_size * arrow_angle
+                        
+                        right_x = mid_x - arrow_dx * arrow_size - arrow_dy * arrow_size * arrow_angle
+                        right_y = mid_y - arrow_dy * arrow_size + arrow_dx * arrow_size * arrow_angle
+                        
+                        pygame.draw.polygon(self.screen, color, [
+                            (arrow_tip_x, arrow_tip_y),
+                            (left_x, left_y),
+                            (right_x, right_y)
+                        ])
     
     def render_transfers(self):
         """Render data transfer animations."""
@@ -847,7 +914,7 @@ class EnhancedNetworkVisualizer:
         """Render statistics panel."""
         panel_width = 320
         panel_height = 300
-        panel_x = WINDOW_WIDTH - panel_width - 10
+        panel_x = self.window_width - panel_width - 10
         panel_y = 10
         
         # Panel background
@@ -870,6 +937,7 @@ class EnhancedNetworkVisualizer:
             f"Active Transfers: {self.network_stats.active_transfers}",
             f"Download Rate: {self.format_rate(self.network_stats.total_download_rate)}",
             f"Upload Rate: {self.format_rate(self.network_stats.total_upload_rate)}",
+            f"Window Size: {self.window_width}x{self.window_height}",
             "",
             "Connection Types:",
         ]
@@ -904,22 +972,22 @@ class EnhancedNetworkVisualizer:
     def render_status_bar(self):
         """Render status bar at bottom."""
         bar_height = 30
-        bar_rect = pygame.Rect(0, WINDOW_HEIGHT - bar_height, WINDOW_WIDTH, bar_height)
+        bar_rect = pygame.Rect(0, self.window_height - bar_height, self.window_width, bar_height)
         
         # Background
-        bar_surf = pygame.Surface((WINDOW_WIDTH, bar_height), pygame.SRCALPHA)
+        bar_surf = pygame.Surface((self.window_width, bar_height), pygame.SRCALPHA)
         bar_surf.fill((0, 0, 0, 180))
         self.screen.blit(bar_surf, bar_rect)
         
         # Status message
         status_text = self.font_small.render(self.status_message, True, self.status_color)
-        self.screen.blit(status_text, (10, WINDOW_HEIGHT - bar_height + 8))
+        self.screen.blit(status_text, (10, self.window_height - bar_height + 8))
         
         # Controls hint
-        controls_text = "C:Connections T:Transfers S:Stats I:Info P:Physics A:AutoLayout R:Reset"
+        controls_text = "C:Connections T:Transfers S:Stats I:Info P:Physics A:AutoLayout R:Reset F:Fullscreen"
         controls = self.font_small.render(controls_text, True, LIGHT_GRAY)
-        controls_rect = controls.get_rect(right=WINDOW_WIDTH - 10, 
-                                        centery=WINDOW_HEIGHT - bar_height // 2)
+        controls_rect = controls.get_rect(right=self.window_width - 10, 
+                                        centery=self.window_height - bar_height // 2)
         self.screen.blit(controls, controls_rect)
     
     def render_no_data_message(self):
@@ -932,16 +1000,17 @@ class EnhancedNetworkVisualizer:
             "2. Data provider API is running on port 8081",
             "3. Some peers are connected to torrents",
             "",
-            f"API Status: {self.data_collector.connection_status}"
+            f"API Status: {self.data_collector.connection_status}",
+            f"Window: {self.window_width}x{self.window_height} (Resizable)"
         ]
         
-        y_start = WINDOW_HEIGHT // 2 - len(messages) * 15
+        y_start = self.window_height // 2 - len(messages) * 15
         
         for i, message in enumerate(messages):
             if message:
                 color = WHITE if not message.startswith("API Status:") else self.status_color
                 text = self.font_medium.render(message, True, color)
-                rect = text.get_rect(center=(WINDOW_WIDTH // 2, y_start + i * 30))
+                rect = text.get_rect(center=(self.window_width // 2, y_start + i * 30))
                 self.screen.blit(text, rect)
     
     def draw_progress_arc(self, x, y, radius, progress, color):
@@ -992,8 +1061,27 @@ class EnhancedNetworkVisualizer:
             self.auto_layout = not self.auto_layout
         elif key == pygame.K_r:
             self.reset_layout()
+        elif key == pygame.K_f:
+            self.toggle_fullscreen()
         elif key == pygame.K_ESCAPE:
             self.selected_peer = None
+    
+    def toggle_fullscreen(self):
+        """Toggle fullscreen mode."""
+        if self.screen.get_flags() & pygame.FULLSCREEN:
+            # Exit fullscreen
+            self.screen = pygame.display.set_mode(
+                (self.window_width, self.window_height), 
+                pygame.RESIZABLE
+            )
+        else:
+            # Enter fullscreen
+            info = pygame.display.Info()
+            self.screen = pygame.display.set_mode(
+                (info.current_w, info.current_h), 
+                pygame.FULLSCREEN
+            )
+            self.handle_window_resize((info.current_w, info.current_h))
     
     def handle_mouse_down(self, pos, button):
         """Handle mouse button down."""
@@ -1054,7 +1142,7 @@ class EnhancedNetworkVisualizer:
         panel_width = 300
         panel_height = 250
         panel_x = 10
-        panel_y = WINDOW_HEIGHT - panel_height - 40  # Above status bar
+        panel_y = self.window_height - panel_height - 40  # Above status bar
         
         # Panel background
         panel_surf = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
@@ -1102,8 +1190,7 @@ class EnhancedNetworkVisualizer:
 def main():
     """Main entry point."""
     try:
-        print("Enhanced BitTorrent Network Visualizer")
-        print("=====================================")
+        
         
         visualizer = EnhancedNetworkVisualizer()
         visualizer.start()
