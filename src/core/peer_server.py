@@ -2,12 +2,7 @@
 
 #Bit-Torrent/src/core/peer_server.py
 
-"""
-BITFIELD FIX: Peer Server with Immediate Bitfield Transmission
-=============================================================
 
-Key Fix: Ensure incoming connections immediately receive proper bitfield information
-"""
 
 import asyncio
 import socket

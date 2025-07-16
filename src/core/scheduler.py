@@ -522,7 +522,28 @@ class SimplifiedTorrentScheduler:
             except Exception as e:
                 logger.error(f"Error in peer loop: {e}")
                 await asyncio.sleep(30.0)
-    
+        
+    def get_all_sessions(self) -> List[Dict]:
+            """Get detailed session data for visualizer."""
+            sessions = []
+            for session in self.sessions.values():
+                sessions.append({
+                    'info_hash': session.info_hash.hex(),
+                    'name': session.metadata.name,
+                    'state': session.state.value,
+                    'total_size': session.metadata.total_size,
+                    'total_downloaded': session.total_downloaded,
+                    'total_uploaded': session.total_uploaded,
+                    'download_rate': session.download_rate,
+                    'upload_rate': session.upload_rate,
+                    'progress_percentage': session.piece_manager.get_progress()[2],
+                    'peer_connections': session.peer_connections,
+                    'pieces_completed': len(session.piece_manager.completed_pieces),
+                    'pieces_total': session.piece_manager.total_pieces,
+                    'storage': session.storage
+                })
+            return sessions
+        
     def get_all_stats(self) -> List[Dict]:
         """Get statistics for all torrents."""
         stats = []
