@@ -54,8 +54,8 @@ class PieceBlock:
     block_offset: int
     block_data: bytes
 
-class BitfieldFixedPeerConnection:
-    """BITFIELD FIX: Peer connection with immediate bitfield transmission."""
+class PeerConnection:
+    """  Peer connection with immediate bitfield transmission."""
     
     def __init__(self, host: str, port: int, info_hash: bytes, peer_id: bytes):
         self.host = host
@@ -86,7 +86,7 @@ class BitfieldFixedPeerConnection:
         self.pending_requests = {}  # (piece_index, block_offset) -> timestamp
         self.max_pending_requests = 5
         
-        # BITFIELD FIX: Callbacks - ensure these can be set before connecting
+        #   Callbacks - ensure these can be set before connecting
         self.on_piece_received = None
         self.on_have_received = None
         self.on_bitfield_received = None
@@ -128,7 +128,7 @@ class BitfieldFixedPeerConnection:
         self.message_queue = asyncio.Queue()
         self.processing_messages = False
         
-        # BITFIELD FIX: Track if we've sent our bitfield
+        #   Track if we've sent our bitfield
         self.bitfield_sent = False
         self.bitfield_received = False
         
@@ -149,12 +149,12 @@ class BitfieldFixedPeerConnection:
             MessageType.PORT: self._handle_port,
         }
         
-        logger.info(f"🔧 BITFIELD FIX: Created peer connection to {host}:{port}")
+        logger.info(f"🔧   Created peer connection to {host}:{port}")
     
     async def connect(self, timeout: float = 10.0) -> bool:
-        """BITFIELD FIX: Connect with proper initialization order."""
+        """  Connect with proper initialization order."""
         try:
-            logger.info(f"🔗 BITFIELD FIX: Connecting to peer {self.host}:{self.port}")
+            logger.info(f"🔗   Connecting to peer {self.host}:{self.port}")
             
             # Establish TCP connection
             self.reader, self.writer = await asyncio.wait_for(
@@ -230,11 +230,11 @@ class BitfieldFixedPeerConnection:
             return False
     
     async def start_message_loop(self):
-        """BITFIELD FIX: Start message processing with immediate bitfield sending."""
+        """  Start message processing with immediate bitfield sending."""
         try:
-            logger.info(f"🔄 BITFIELD FIX: Starting message loop for {self.host}:{self.port}")
+            logger.info(f"🔄   Starting message loop for {self.host}:{self.port}")
             
-            # BITFIELD FIX: Send our bitfield immediately if we have pieces
+            #   Send our bitfield immediately if we have pieces
             await self._send_initial_bitfield()
             
             # Start processing messages
@@ -265,25 +265,25 @@ class BitfieldFixedPeerConnection:
             await self.disconnect()
     
     async def _send_initial_bitfield(self):
-        """BITFIELD FIX: Send our bitfield immediately after handshake."""
+        """  Send our bitfield immediately after handshake."""
         try:
-            logger.info(f"🚀 BITFIELD FIX: Sending initial bitfield to {self.host}:{self.port}")
+            logger.info(f"🚀   Sending initial bitfield to {self.host}:{self.port}")
             logger.info(f"   Available pieces: {len(self.available_pieces)} - {sorted(list(self.available_pieces))}")
             logger.info(f"   Total pieces: {self.total_pieces}")
             
-            # BITFIELD FIX: Always send bitfield if we have any pieces
+            #   Always send bitfield if we have any pieces
             if len(self.available_pieces) > 0 and self.total_pieces > 0:
                 bitfield = self._create_bitfield()
                 if bitfield:
                     await self.send_bitfield(bitfield)
-                    logger.info(f"✅ BITFIELD FIX: Sent bitfield to {self.host}:{self.port}")
+                    logger.info(f"✅   Sent bitfield to {self.host}:{self.port}")
                     logger.info(f"   Bitfield hex: {bitfield.hex()}")
                     logger.info(f"   Bitfield represents {len(self.available_pieces)} pieces")
                     self.bitfield_sent = True
                 else:
-                    logger.error(f"❌ BITFIELD FIX: Failed to create bitfield for {self.host}:{self.port}")
+                    logger.error(f"❌   Failed to create bitfield for {self.host}:{self.port}")
             else:
-                logger.info(f"💤 BITFIELD FIX: No bitfield to send to {self.host}:{self.port}")
+                logger.info(f"💤   No bitfield to send to {self.host}:{self.port}")
                 logger.info(f"   Available pieces: {len(self.available_pieces)}")
                 logger.info(f"   Total pieces: {self.total_pieces}")
             
@@ -296,15 +296,15 @@ class BitfieldFixedPeerConnection:
             await self.send_unchoke()
             logger.info(f"🔓 Sent initial UNCHOKE to {self.host}:{self.port}")
             
-            logger.info(f"✅ BITFIELD FIX: Initial protocol complete for {self.host}:{self.port}")
+            logger.info(f"✅   Initial protocol complete for {self.host}:{self.port}")
             
         except Exception as e:
-            logger.error(f"❌ BITFIELD FIX: Error sending initial bitfield to {self.host}:{self.port}: {e}")
+            logger.error(f"❌   Error sending initial bitfield to {self.host}:{self.port}: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
     
     def _create_bitfield(self) -> bytes:
-        """BITFIELD FIX: Create bitfield with better validation and logging."""
+        """  Create bitfield with better validation and logging."""
         try:
             logger.debug(f"🔧 Creating bitfield for {self.host}:{self.port}")
             logger.debug(f"   Available pieces: {sorted(list(self.available_pieces))}")
@@ -462,7 +462,7 @@ class BitfieldFixedPeerConnection:
             logger.warning(f"⚠️  Unknown message type {message.message_type} from {self.host}:{self.port}")
     
     async def _send_message(self, message_type: MessageType, payload: bytes = b''):
-        """BITFIELD FIX: Send a message with better error handling."""
+        """  Send a message with better error handling."""
         if not self.connected:
             logger.warning(f"⚠️  Cannot send {message_type.name} to {self.host}:{self.port} - not connected")
             return False
@@ -517,7 +517,7 @@ class BitfieldFixedPeerConnection:
         self.peer_interested = True
         logger.info(f"🎯 Peer {self.host}:{self.port} is interested in our pieces")
         
-        # IMMEDIATE FIX: Auto-unchoke interested peers for testing
+        # Auto-unchoke interested peers for testing
         if self.peer_interested and self.am_choking:
             logger.info(f"🔓 Auto-unchoking interested peer {self.host}:{self.port}")
             await self.send_unchoke()
@@ -545,8 +545,8 @@ class BitfieldFixedPeerConnection:
             self.on_have_received(piece_index)
     
     async def _handle_bitfield(self, payload: bytes):
-        """BITFIELD FIX: Handle bitfield message with comprehensive logging."""
-        logger.info(f"📊 BITFIELD FIX: Received bitfield from {self.host}:{self.port}")
+        """  Handle bitfield message with comprehensive logging."""
+        logger.info(f"📊   Received bitfield from {self.host}:{self.port}")
         logger.info(f"   Payload length: {len(payload)} bytes")
         logger.info(f"   Payload hex: {payload.hex()}")
         logger.info(f"   Total pieces expected: {self.total_pieces}")
@@ -569,7 +569,7 @@ class BitfieldFixedPeerConnection:
                     piece_count += 1
                     logger.debug(f"   Piece {piece_index} is available")
 
-        logger.info(f"📊 BITFIELD FIX: Peer {self.host}:{self.port} has {piece_count} pieces")
+        logger.info(f"📊   Peer {self.host}:{self.port} has {piece_count} pieces")
         logger.info(f"   Available pieces: {sorted(list(self.peer_pieces))}")
         
         self.bitfield_received = True
@@ -686,16 +686,16 @@ class BitfieldFixedPeerConnection:
         await self._send_message(MessageType.HAVE, payload)
     
     async def send_bitfield(self, bitfield: bytes):
-        """BITFIELD FIX: Send bitfield message with detailed logging."""
-        logger.info(f"📤 BITFIELD FIX: Sending bitfield to {self.host}:{self.port}")
+        """  Send bitfield message with detailed logging."""
+        logger.info(f"📤   Sending bitfield to {self.host}:{self.port}")
         logger.info(f"   Bitfield length: {len(bitfield)} bytes")
         logger.info(f"   Bitfield hex: {bitfield.hex()}")
         
         success = await self._send_message(MessageType.BITFIELD, bitfield)
         if success:
-            logger.info(f"✅ BITFIELD FIX: Successfully sent bitfield to {self.host}:{self.port}")
+            logger.info(f"✅   Successfully sent bitfield to {self.host}:{self.port}")
         else:
-            logger.error(f"❌ BITFIELD FIX: Failed to send bitfield to {self.host}:{self.port}")
+            logger.error(f"❌   Failed to send bitfield to {self.host}:{self.port}")
     
     async def send_request(self, piece_index: int, block_offset: int, block_length: int):
         """Send request message."""
@@ -866,6 +866,5 @@ class BitfieldFixedPeerConnection:
         status = "connected" if self.connected else "disconnected"
         choke_status = "choked" if self.peer_choking else "unchoked"
         bitfield_status = f"bitfield_sent:{self.bitfield_sent},received:{self.bitfield_received}"
-        return f"BitfieldFixedPeer({self.host}:{self.port}, {status}, {choke_status}, pieces:{len(self.peer_pieces)}, {bitfield_status})"
+        return f"Peer({self.host}:{self.port}, {status}, {choke_status}, pieces:{len(self.peer_pieces)}, {bitfield_status})"
 
-PeerConnection = BitfieldFixedPeerConnection

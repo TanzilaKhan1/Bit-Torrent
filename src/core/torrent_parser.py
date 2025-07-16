@@ -98,19 +98,6 @@ def load_torrent_file(path: str) -> TorrentMetadata:
     else:
         raise ValueError("Invalid torrent structure: no 'length' or 'files' key in info")
 
-#   # Single-file torrent
-# files = [("example.txt", 1000000)]  # 1MB file
-# total_size = 1000000
-
-# # Multi-file torrent
-# files = [
-#     ("my_torrent/folder1/file1.txt", 500000),
-#     ("my_torrent/folder1/file2.txt", 300000),
-#     ("my_torrent/folder2/file3.txt", 200000)
-# ]
-# total_size = 1000000  # Sum of all file sizes
-
-
 
     # Trackers
     trackers: List[str] = []

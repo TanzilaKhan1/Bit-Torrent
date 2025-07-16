@@ -27,8 +27,8 @@ class IncomingPeerConnection:
     def __post_init__(self):
         self.connected_at = time.time()
 
-class BitfieldFixedPeerServer:
-    """BITFIELD FIXED: Peer server that immediately sends bitfield to incoming connections."""
+class PeerServer:
+    """Peer server that immediately sends bitfield to incoming connections."""
     
     def __init__(self, host: str = "0.0.0.0", port: int = 6881):
         self.host = host
@@ -54,7 +54,7 @@ class BitfieldFixedPeerServer:
         self.on_piece_uploaded = None
         self.on_piece_downloaded = None
         
-        logger.info(f"🔧 BITFIELD FIX: Initialized peer server on {host}:{port}")
+        logger.info(f"🔧 Initialized peer server on {host}:{port}")
     
     async def start(self):
         """Start the peer server."""
@@ -69,7 +69,7 @@ class BitfieldFixedPeerServer:
             )
             
             self.running = True
-            logger.info(f"🚀 BITFIELD FIX: Peer server started on {self.host}:{self.port}")
+            logger.info(f"🚀 Peer server started on {self.host}:{self.port}")
             
             # Start background tasks
             asyncio.create_task(self._cleanup_connections())
@@ -94,12 +94,12 @@ class BitfieldFixedPeerServer:
             self.server.close()
             await self.server.wait_closed()
         
-        logger.info("🛑 BITFIELD FIX: Peer server stopped")
+        logger.info("🛑 Peer server stopped")
     
     async def _handle_client_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """BITFIELD FIX: Handle incoming connection with immediate bitfield transmission."""
+        """Handle incoming connection with immediate bitfield transmission."""
         peer_addr = writer.get_extra_info('peername')
-        logger.info(f"🔗 BITFIELD FIX: New incoming connection from {peer_addr}")
+        logger.info(f"🔗 New incoming connection from {peer_addr}")
         
         peer_id = None
         peer_connection = None
@@ -152,7 +152,7 @@ class BitfieldFixedPeerServer:
                 return
             
             # Step 5: Create and configure peer connection
-            logger.debug(f"🔧 BITFIELD FIX: Setting up peer connection for {peer_addr}")
+            logger.debug(f"🔧 Setting up peer connection for {peer_addr}")
             
             peer_connection = PeerConnection(
                 host=peer_addr[0],
@@ -161,14 +161,14 @@ class BitfieldFixedPeerServer:
                 peer_id=session_info['peer_id']
             )
             
-            # BITFIELD FIX: Set up connection state properly
+            # Set up connection state properly
             peer_connection.reader = reader
             peer_connection.writer = writer
             peer_connection.connected = True
             peer_connection.handshake_complete = True
             peer_connection.remote_peer_id = peer_id
             
-            # BITFIELD FIX: Get piece information IMMEDIATELY
+            #   Get piece information IMMEDIATELY
             piece_manager = session_info.get('piece_manager')
             if piece_manager:
                 # Get the CURRENT piece state
@@ -176,7 +176,7 @@ class BitfieldFixedPeerServer:
                 pending_pieces = piece_manager.pending_pieces.copy()
                 total_pieces = piece_manager.total_pieces
                 
-                logger.info(f"🔧 BITFIELD FIX: Setting piece info for {peer_addr}:")
+                logger.info(f"🔧   Setting piece info for {peer_addr}:")
                 logger.info(f"   Available pieces: {len(completed_pieces)} - {sorted(list(completed_pieces))}")
                 logger.info(f"   Needed pieces: {len(pending_pieces)} - {sorted(list(pending_pieces))}")
                 logger.info(f"   Total pieces: {total_pieces}")
@@ -194,7 +194,7 @@ class BitfieldFixedPeerServer:
                 piece_manager.add_peer(peer_id_str, peer_connection)
                 logger.info(f"✅ Added peer {peer_id_str} to piece manager")
                 
-                # PEER COUNT FIX: Also add to session peer_connections for proper statistics
+                #  Also add to session peer_connections for proper statistics
                 if 'session' in session_info:
                     session = session_info['session']
                     session.peer_connections[peer_id_str] = peer_connection
@@ -205,7 +205,7 @@ class BitfieldFixedPeerServer:
                 logger.error(f"❌ No piece manager found for session")
                 return
             
-            # CALLBACK FIX: Set up statistics callbacks WITHOUT overwriting piece manager callbacks
+            #  Set up statistics callbacks WITHOUT overwriting piece manager callbacks
             # Store the piece manager's callbacks
             piece_manager_bitfield_callback = peer_connection.on_bitfield_received
             piece_manager_piece_callback = peer_connection.on_piece_received
@@ -213,7 +213,7 @@ class BitfieldFixedPeerServer:
             # Set up have callback with statistics tracking  
             peer_connection.on_have_received = self._on_have_received
             
-            # CALLBACK FIX: Chain the piece_received callbacks instead of overwriting
+            #  Chain the piece_received callbacks instead of overwriting
             def chained_piece_callback(piece_block):
                 # First call piece manager callback (most important - adds blocks to downloads)
                 if piece_manager_piece_callback:
@@ -223,7 +223,7 @@ class BitfieldFixedPeerServer:
             
             peer_connection.on_piece_received = chained_piece_callback
             
-            # CALLBACK FIX: Chain the bitfield callbacks instead of overwriting
+            #  Chain the bitfield callbacks instead of overwriting
             def chained_bitfield_callback(pieces):
                 # First call piece manager callback (most important)
                 if piece_manager_bitfield_callback:
@@ -246,14 +246,14 @@ class BitfieldFixedPeerServer:
             self.total_connections += 1
             self.active_connections += 1
             
-            logger.info(f"✅ BITFIELD FIX: Registered connection from {peer_addr}, peer_id: {peer_id.hex()[:8]}")
+            logger.info(f"✅   Registered connection from {peer_addr}, peer_id: {peer_id.hex()[:8]}")
             
             # Notify callback
             if self.on_new_connection:
                 self.on_new_connection(incoming_connection)
             
-            # Step 7: BITFIELD FIX - Start message loop which will immediately send bitfield
-            logger.info(f"🚀 BITFIELD FIX: Starting message loop for {peer_addr}")
+            # Step 7: Start message loop which will immediately send bitfield
+            logger.info(f"🚀   Starting message loop for {peer_addr}")
             logger.info(f"   Connection has {len(peer_connection.available_pieces)} available pieces")
             logger.info(f"   Available pieces: {sorted(list(peer_connection.available_pieces))}")
             
@@ -278,7 +278,7 @@ class BitfieldFixedPeerServer:
                 del self.connections[peer_id]
                 self.active_connections -= 1
                 
-                # PEER COUNT FIX: Also remove from session peer_connections
+                #  Also remove from session peer_connections
                 peer_id_str = f"{peer_addr[0]}:{peer_addr[1]}"
                 if peer_info_hash and peer_info_hash in self.active_torrents:
                     session_info = self.active_torrents[peer_info_hash]
@@ -305,7 +305,7 @@ class BitfieldFixedPeerServer:
     def add_torrent_session(self, info_hash: bytes, session_info: Dict):
         """Add a torrent session to the server."""
         self.active_torrents[info_hash] = session_info
-        logger.info(f"📋 BITFIELD FIX: Added torrent session: {session_info.get('name', 'Unknown')} ({info_hash.hex()[:16]})")
+        logger.info(f"📋   Added torrent session: {session_info.get('name', 'Unknown')} ({info_hash.hex()[:16]})")
         
         # Log piece information for debugging
         piece_manager = session_info.get('piece_manager')
@@ -422,5 +422,3 @@ class BitfieldFixedPeerServer:
             })
         return peers
 
-# For backward compatibility
-PeerServer = BitfieldFixedPeerServer

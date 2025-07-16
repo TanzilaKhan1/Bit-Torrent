@@ -33,14 +33,14 @@ class FinalFixedBitTorrentPeer:
         # Create download directory
         self.download_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"FINAL FIXED: Peer initialized on port {port}, download dir: {download_dir}")
+        logger.info(f"  Peer initialized on port {port}, download dir: {download_dir}")
     
     async def start(self):
         """Start the peer."""
         if self.running:
             return
         
-        logger.info(f"🚀 FINAL FIXED: Starting peer on port {self.port}...")
+        logger.info(f"🚀   Starting peer on port {self.port}...")
         
         try:
             # Start peer server
@@ -167,10 +167,10 @@ class FinalFixedBitTorrentPeer:
                 await asyncio.sleep(1.0)
     
     def _session_to_visual_info(self, session_data: dict) -> TorrentVisualInfo:
-        """FINAL FIXED: Convert session data to TorrentVisualInfo with accurate statistics."""
+        """ Convert session data to TorrentVisualInfo with accurate statistics."""
         peer_info = []
         
-        # FIXED: Get accurate peer statistics
+        #   Get accurate peer statistics
         for peer_id, peer_connection in session_data.get('peer_connections', {}).items():
             # Determine status based on actual connection state
             status = 'disconnected'
@@ -201,7 +201,7 @@ class FinalFixedBitTorrentPeer:
             )
             peer_info.append(peer_visual)
         
-        # FIXED: Get storage information
+        #   Get storage information
         storage_type = "standard"
         seeded_files = None
         downloaded_files = None
@@ -217,16 +217,16 @@ class FinalFixedBitTorrentPeer:
                 seeded_files = []
                 downloaded_files = []
         
-        # FINAL FIXED: Use accurate statistics from session
+        #   Use accurate statistics from session
         return TorrentVisualInfo(
             info_hash=session_data.get('info_hash', ''),
             name=session_data.get('name', ''),
             total_size=session_data.get('total_size', 0),
-            downloaded=session_data.get('total_downloaded', 0),  # FIXED: Use actual downloaded bytes
-            uploaded=session_data.get('total_uploaded', 0),      # FIXED: Use actual uploaded bytes
+            downloaded=session_data.get('total_downloaded', 0),  #   Use actual downloaded bytes
+            uploaded=session_data.get('total_uploaded', 0),      #   Use actual uploaded bytes
             progress=session_data.get('progress_percentage', 0.0) / 100.0,
-            download_rate=session_data.get('download_rate', 0.0),  # FIXED: Use actual download rate
-            upload_rate=session_data.get('upload_rate', 0.0),     # FIXED: Use actual upload rate
+            download_rate=session_data.get('download_rate', 0.0),  #   Use actual download rate
+            upload_rate=session_data.get('upload_rate', 0.0),     #   Use actual upload rate
             peers=peer_info,
             pieces_completed=session_data.get('pieces_completed', 0),
             pieces_total=session_data.get('pieces_total', 0),

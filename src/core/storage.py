@@ -26,8 +26,8 @@ class PieceInfo:
     downloaded: bool = False
     verified: bool = False
 
-class FixedTorrentStorage:
-    """FIXED: Manages file I/O operations for a torrent."""
+class TorrentStorage:
+    """Manages file I/O operations for a torrent."""
     
     def __init__(self, metadata: TorrentMetadata, download_dir: str):
         self.metadata = metadata
@@ -102,7 +102,7 @@ class FixedTorrentStorage:
         logger.info(f"📁 Created file structure for {len(self.metadata.files)} files")
     
     async def initialize_existing_pieces(self):
-        """FIXED: Synchronously check for existing pieces."""
+        """Synchronously check for existing pieces."""
         try:
             logger.info("🔍 Checking for existing pieces...")
             
@@ -145,7 +145,7 @@ class FixedTorrentStorage:
     
     
     async def _write_piece_to_files(self, piece_index: int, data: bytes) -> bool:
-        """FIXED: Write piece data to the appropriate files."""
+        """Write piece data to the appropriate files."""
         try:
             piece_info = self.pieces_info[piece_index]
             piece_start = piece_info.offset
@@ -217,7 +217,7 @@ class FixedTorrentStorage:
             return False
     
     async def read_piece(self, piece_index: int) -> Optional[bytes]:
-        """FIXED: Read a piece from disk with validation."""
+        """Read a piece from disk with validation."""
         if piece_index not in self.pieces_info:
             logger.error(f"❌ Invalid piece index: {piece_index}")
             return None
@@ -464,7 +464,7 @@ class FixedTorrentStorage:
             f"{downloaded_bytes}/{total_bytes}"
         )
 
-class FixedPeerStorage(FixedTorrentStorage):
+class PeerStorage(TorrentStorage):
     """Storage for peer-to-peer with downloaded files."""
     
     def __init__(self, metadata: TorrentMetadata, peer_dir: str):
@@ -486,7 +486,7 @@ class FixedPeerStorage(FixedTorrentStorage):
                 
     
     async def initialize_existing_pieces(self):
-        """FIXED: Check seeded files synchronously, then call parent."""
+        """Check seeded files synchronously, then call parent."""
         try:
             # First check seeded files
             seeded_count = await self._check_existing_seeded_files()
@@ -507,7 +507,7 @@ class FixedPeerStorage(FixedTorrentStorage):
             return 0
     
     async def _check_existing_seeded_files(self):
-        """FIXED: Synchronously check seeded files."""
+        """Synchronously check seeded files."""
         try:
             logger.info(f"🔍 Checking for existing files in {self.seeded_dir}")
             
@@ -636,7 +636,7 @@ class FixedPeerStorage(FixedTorrentStorage):
             return None
     
     async def read_piece(self, piece_index: int) -> Optional[bytes]:
-        """FIXED: Read a piece from either seeded or downloaded folder."""
+        """Read a piece from either seeded or downloaded folder."""
         if piece_index not in self.pieces_info:
             logger.error(f"❌ Invalid piece index: {piece_index}")
             return None
@@ -711,6 +711,3 @@ class FixedPeerStorage(FixedTorrentStorage):
                 f"downloaded_files={downloaded_count}, "
                 f"progress={self.get_progress()[2]:.1f}%)")
 
-# For backward compatibility
-TorrentStorage = FixedTorrentStorage
-PeerStorage = FixedPeerStorage

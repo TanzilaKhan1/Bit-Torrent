@@ -4,10 +4,10 @@
 #Bit-Torrent/src/core/cli_visualizer.py
 
 """
-FIXED: CLI Visualizer with Proper Statistics Updates
+  CLI Visualizer with Proper Statistics Updates
 ===================================================
 
-Key Fix: Ensure statistics are properly retrieved and displayed
+ Ensure statistics are properly retrieved and displayed
 """
 
 import asyncio
@@ -57,8 +57,8 @@ class TorrentVisualInfo:
     downloaded_files: Optional[List[str]] = None  # Files downloaded from peers
     storage_type: str = "standard"  # "standard" or "peer"
 
-class FixedCLIVisualizer:
-    """FIXED: Real-time CLI visualization with proper statistics."""
+class  CLIVisualizer:
+    """  Real-time CLI visualization with proper statistics."""
     
     def __init__(self):
         self.running = False
@@ -76,7 +76,7 @@ class FixedCLIVisualizer:
         self.display_mode = 'overview'  # 'overview', 'peers', 'transfers'
         self.selected_torrent = None
         
-        # FIXED: Better statistics tracking
+        #   Better statistics tracking
         self.total_downloaded = 0
         self.total_uploaded = 0
         self.session_start_time = time.time()
@@ -147,7 +147,7 @@ class FixedCLIVisualizer:
         return text[:max_length-3] + "..."
     
     def update_torrent(self, torrent_info: TorrentVisualInfo):
-        """FIXED: Update torrent information with proper statistics."""
+        """  Update torrent information with proper statistics."""
         info_hash = torrent_info.info_hash
         
         # Calculate rates if we have previous data
@@ -170,7 +170,7 @@ class FixedCLIVisualizer:
         # Update torrent
         self.torrents[info_hash] = torrent_info
         
-        # FIXED: Update global statistics properly
+        #   Update global statistics properly
         self.total_downloaded = sum(t.downloaded for t in self.torrents.values())
         self.total_uploaded = sum(t.uploaded for t in self.torrents.values())
         
@@ -491,7 +491,7 @@ class FixedCLIVisualizer:
         print(self._color_text("Commands: [o]verview [p]eers [t]ransfers [q]uit", 'dim'))
     
     async def _render_peers(self):
-        """FIXED: Render peer connections display with transfer stats."""
+        """  Render peer connections display with transfer stats."""
         # Header
         header = f"Peer Connections - {datetime.now().strftime('%H:%M:%S')}"
         print(self._color_text(header.center(self.terminal_width), 'bold'))
@@ -540,7 +540,7 @@ class FixedCLIVisualizer:
         print(self._color_text("Commands: [o]verview [p]eers [t]ransfers [q]uit", 'dim'))
     
     async def _render_transfers(self):
-        """FIXED: Render transfer activity display with detailed stats."""
+        """  Render transfer activity display with detailed stats."""
         # Header
         header = f"Transfer Activity - {datetime.now().strftime('%H:%M:%S')}"
         print(self._color_text(header.center(self.terminal_width), 'bold'))
@@ -633,5 +633,3 @@ class FixedCLIVisualizer:
         """Show error message."""
         self.print_status(error_message, 'error')
 
-# For backward compatibility
-CLIVisualizer = FixedCLIVisualizer

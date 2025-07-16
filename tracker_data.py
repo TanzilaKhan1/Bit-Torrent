@@ -281,7 +281,7 @@ class EnhancedTrackerDataProvider:
                     'uploading_to': []
                 }
         elif self.scheduler:
-            # Empty state fix: create placeholder local peer
+            # create placeholder local peer
             default_port = getattr(self.scheduler, 'listen_port', self.api_port)
             local_peer_id = f"127.0.0.1:{default_port}"
             local_peers[local_peer_id] = {

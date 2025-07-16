@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import Path
 
 from .torrent_parser import TorrentMetadata, load_torrent_file
-from .storage import FixedPeerStorage as TorrentStorage
+from .storage import PeerStorage as TorrentStorage
 from .piece_manager import PieceManager
 from .peer_connection import PeerConnection
 from .tracker_client import TrackerManager, TrackerEvent
@@ -215,7 +215,7 @@ class SimplifiedTorrentScheduler:
                 port=self.listen_port
             )
             
-            # PROGRESS UPDATE FIX: Set up immediate progress update callback AFTER session creation
+            # Set up immediate progress update callback AFTER session creation
             def update_session_stats():
                 """Immediately update session statistics."""
                 session.total_downloaded = storage.get_downloaded_bytes()
@@ -251,7 +251,7 @@ class SimplifiedTorrentScheduler:
                     'peer_id': session.peer_id,
                     'piece_manager': session.piece_manager,
                     'storage': session.storage,
-                    'session': session  # PEER COUNT FIX: Add session reference for peer tracking
+                    'session': session  #  Add session reference for peer tracking
                 }
                 self.peer_server.add_torrent_session(session.info_hash, session_info)
             

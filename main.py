@@ -146,7 +146,7 @@ class BitTorrentApplication:
             from src.core.bitorrentGui import BitTorrentMainWindow
             
             self.gui_app = QApplication(sys.argv)
-            self.gui_app.setApplicationName("FIXED BitTorrent Client")
+            self.gui_app.setApplicationName("BitTorrent Client")
             self.gui_app.setApplicationVersion("2.0")
             
             # Create main window
@@ -168,7 +168,7 @@ class BitTorrentApplication:
                 self.enable_visualizer(visualizer_port, aggregator_url)
             
             self.gui_mode = True
-            logger.info("FIXED: GUI setup complete")
+            logger.info("GUI setup complete")
             
         except ImportError as e:
             logger.error(f"Failed to import PyQt6: {e}")
@@ -194,7 +194,7 @@ class BitTorrentApplication:
             await self.scheduler.start()
             await self.peer_server.start()
             
-            logger.info(f"FIXED: BitTorrent components started on port {port}")
+            logger.info(f"BitTorrent components started on port {port}")
             
         except Exception as e:
             logger.error(f"Error setting up components: {e}")
@@ -213,9 +213,9 @@ class BitTorrentApplication:
             # Show GUI
             self.gui_window.show()
             
-            # FIXED: Show status when visualizer is enabled
+            #  Show status when visualizer is enabled
             if enable_visualizer:
-                print("🎉 FIXED: Comprehensive visualizer enabled!")
+                print("🎉  Comprehensive visualizer enabled!")
                 print("🔍 Will show ALL 4 peers with proper color coding")
                 print("📊 Blue=Download, Orange=Upload, Purple=Local, Green=Seeding")
             
@@ -541,7 +541,7 @@ def main():
     peer_parser.add_argument('--download-dir', required=True, help='Download directory')
     peer_parser.add_argument('--torrent', help='Torrent file to add automatically')
     peer_parser.add_argument('--enable-visualizer', action='store_true', 
-                           help='Enable FIXED comprehensive network visualizer')
+                           help='Enable comprehensive network visualizer')
     peer_parser.add_argument('--visualizer-port', type=int, default=8081,
                            help='Visualizer API port')
     peer_parser.add_argument('--aggregator-url', 
@@ -557,7 +557,7 @@ def main():
     
     try:
         if args.command == 'tracker':
-            print(f"🎯 Starting FIXED tracker on port {args.port}")
+            print(f"🎯 Starting tracker on port {args.port}")
             asyncio.run(run_tracker(args.port))
             
         elif args.command == 'aggregator':

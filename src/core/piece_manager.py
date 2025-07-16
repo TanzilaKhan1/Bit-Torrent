@@ -104,8 +104,8 @@ class SimplifiedPieceManager:
         self.peers: Dict[str, PeerInfo] = {}
         
         # Configuration
-        self.max_concurrent_pieces = 1  # OVERLOAD FIX: Reduce to 1 to prevent overwhelming connections
-        self.max_requests_per_peer = 5   # OVERLOAD FIX: Limit concurrent requests per peer
+        self.max_concurrent_pieces = 1  # Reduce to 1 to prevent overwhelming connections
+        self.max_requests_per_peer = 5   # Limit concurrent requests per peer
         
         # Initialize from storage
         self._initialize_from_storage()
@@ -117,7 +117,7 @@ class SimplifiedPieceManager:
         #  Add event to wake up download manager
         self.new_opportunity_event = asyncio.Event()
         
-        # PROGRESS UPDATE FIX: Add callback for immediate progress updates
+        # Add callback for immediate progress updates
         self.on_progress_update = None
         
         logger.info(f"Simplified piece manager initialized: {len(self.completed_pieces)}/{self.total_pieces} pieces")
@@ -151,7 +151,7 @@ class SimplifiedPieceManager:
         peer_connection.set_needed_pieces(self.pending_pieces)
         peer_connection.total_pieces = self.total_pieces
         
-        # CRITICAL FIX: Set up the callbacks properly
+        #  Set up the callbacks properly
         peer_connection.on_piece_received = self._on_piece_received
         peer_connection.on_have_received = self._on_have_received
         peer_connection.on_bitfield_received = lambda pieces: self._on_bitfield_received(peer_id, pieces)
@@ -317,7 +317,7 @@ class SimplifiedPieceManager:
                         
                         logger.info(f"Completed piece {piece_index}")
                         
-                        # PROGRESS UPDATE FIX: Trigger immediate progress update
+                        # Trigger immediate progress update
                         if self.on_progress_update:
                             self.on_progress_update()
                         
@@ -371,7 +371,7 @@ class SimplifiedPieceManager:
             logger.info(f"       - Total available pieces: {len(peer_info.available_pieces)}")
             logger.info(f"       - Available pieces: {sorted(list(peer_info.available_pieces))}")
             
-            # FIXED: Only check pieces that are not already being downloaded
+            # Only check pieces that are not already being downloaded
             for piece_index in available_pieces:
                 can_download = peer_info.can_download_piece(piece_index)
                 logger.info(f"       - Piece {piece_index}: can_download={can_download}")
@@ -458,7 +458,7 @@ class SimplifiedPieceManager:
             logger.debug(f"  - Am interested: {peer_info.connection.am_interested}")
             return
         
-        # OVERLOAD FIX: Check if peer has capacity for more requests
+        # Check if peer has capacity for more requests
         pending_requests = len(peer_info.connection.pending_requests)
         max_requests = peer_info.connection.max_pending_requests
         
@@ -477,7 +477,7 @@ class SimplifiedPieceManager:
         logger.info(f"   📦 Block offsets: {blocks_to_request[:10]}")  # Show first 10 for brevity
         logger.info(f"   📤 Requesting {len(blocks_to_request)} blocks...")
         
-        # OVERLOAD FIX: Add throttling and better error handling
+        #  Add throttling and better error handling
         successful_requests = 0
         failed_requests = 0
         
@@ -492,7 +492,7 @@ class SimplifiedPieceManager:
                     successful_requests += 1
                     logger.info(f"   ✅ Successfully requested piece {piece_index} block {block_offset} from {peer_id}")
                     
-                    # OVERLOAD FIX: Small delay between requests to prevent flooding
+                    #  Small delay between requests to prevent flooding
                     await asyncio.sleep(0.01)  # 10ms delay
                 else:
                     failed_requests += 1
@@ -510,7 +510,7 @@ class SimplifiedPieceManager:
         logger.info(f"   📊 Total requested blocks: {len(download.requested_blocks)}")
         logger.info(f"   📊 Total received blocks: {len(download.blocks)}")
         
-        # OVERLOAD FIX: If too many failures, mark peer as problematic
+        #  If too many failures, mark peer as problematic
         if failed_requests > successful_requests and failed_requests > 2:
             logger.warning(f"⚠️  Peer {peer_id} has high failure rate ({failed_requests} failures), may need throttling")
     
@@ -547,7 +547,7 @@ class SimplifiedPieceManager:
                 # Start new downloads
                 started_new_downloads = False
                 
-                # OVERLOAD FIX: Only start new downloads if current ones are making progress
+                #  Only start new downloads if current ones are making progress
                 # This prevents overwhelming peer connections with too many concurrent requests
                 can_start_new_downloads = True
                 

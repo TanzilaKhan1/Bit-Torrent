@@ -247,7 +247,7 @@ class StatsUpdateThread(QThread):
                     stats = self.app.scheduler.get_all_stats()
                     self.stats_updated.emit(stats)
                     
-                    # PROGRESS UPDATE FIX: Update more frequently during active downloads
+                    #  Update more frequently during active downloads
                     update_interval = 1000  # Default 1 second
                     
                     # Check if any torrent is actively downloading

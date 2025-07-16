@@ -1,10 +1,23 @@
-#  Python BitTorrent Client
+#  Python BitTorrent Client with Advanced Visualization
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-A **complete, modern BitTorrent client** implementation written in Python with full async/await support. Built from the ground up following BitTorrent protocol specifications and modern software engineering practices.
+A **complete, modern BitTorrent client** implementation written in Python with full async/await support and **advanced real-time network visualization**. Built from the ground up following BitTorrent protocol specifications and modern software engineering practices.
+
+##  System Architecture
+
+This BitTorrent implementation features a **distributed architecture** with multiple components working together.
+
+
+### Components Overview
+
+- **🎯 Tracker**: Centralized peer discovery and announce server
+- **🌐 Aggregator**: Collects visualization data from all peers
+- **🚀 Peers**: BitTorrent clients with individual download directories and embedded visualizers
+- **📊 Standalone Visualizer**: PyGame-based real-time network visualization
+
 
 ##  TODO
 
@@ -45,6 +58,15 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 - **Command-line interface** with multiple operation modes
 - **Daemon mode** for background operation
 
+###  **Visualization & Monitoring**
+
+- **🎨 Real-time network visualization** with PyGame
+- **📊 Central data aggregation** from multiple peers
+- **📈 Individual peer visualizers** with embedded web interfaces
+- **🌐 Network topology mapping** showing peer connections
+- **📱 Web-based monitoring** interfaces
+- **⚡ Live transfer statistics** and bandwidth monitoring
+
 ###  **Security & Reliability**
 
 - **Protocol encryption foundation** (Diffie-Hellman key exchange)
@@ -53,148 +75,7 @@ A **complete, modern BitTorrent client** implementation written in Python with f
 - **Connection timeout management**
 - **File integrity verification**
 
-##  Requirements
 
-- **Python 3.13+**
-- **asyncio** support
-- **Network connectivity** for peer communication
-
-##  Installation
-
-### Using uv (Recommended)
-
-```bash
-git clone https://github.com/yourusername/BitTorrent.git
-cd BitTorrent
-uv sync
-```
-
-### Using pip
-
-```bash
-git clone https://github.com/yourusername/BitTorrent.git
-cd BitTorrent
-pip install -e .
-```
-
-### Dependencies
-
-The project uses the following key dependencies:
-
-- `aiofiles` - Async file I/O operations
-- `aiohttp` - HTTP client for tracker communication
-- `bencodepy` - Bencoding/decoding support
-- `cryptography` - Encryption and hashing
-- `aiodns` - Async DNS resolution
-
-## 🎯 Quick Start
-
-### 1. Create a Torrent File
-
-```bash
-# Create a torrent from a single file
-uv run python torrent_creator.py \
-    --input myfile.pdf \
-    --output myfile.torrent \
-    --trackers http://tracker.example.com/announce
-
-# Create a torrent from a directory
-uv run python torrent_creator.py \
-    --input /path/to/directory \
-    --output directory.torrent \
-    --trackers http://tracker1.example.com/announce http://tracker2.example.com/announce \
-    --piece-length 1048576
-```
-
-### 2. Download a Torrent
-
-```bash
-# Add and download a torrent file
-uv run python main.py add myfile.torrent
-
-# View download progress
-uv run python main.py list
-
-# Show detailed statistics
-uv run python main.py stats
-```
-
-### 3. Run as Daemon
-
-```bash
-# Run in background mode
-uv run python main.py daemon --port 6881 --download-dir ./downloads
-```
-
-## 📖 Usage Guide
-
-### Command Line Interface
-
-The BitTorrent client provides a comprehensive CLI with the following commands:
-
-#### Add Torrent File
-
-```bash
-uv run python main.py add <torrent_file>
-```
-
-- Downloads the specified .torrent file
-- Shows real-time progress for 30 seconds
-- Automatically manages peer connections
-
-#### Add Magnet URI
-
-```bash
-uv run python main.py magnet <magnet_uri>
-```
-
-- Adds a torrent from magnet URI
-- **Note**: Metadata exchange is not yet fully implemented
-
-#### List Active Torrents
-
-```bash
-uv run python main.py list
-```
-
-- Shows all active download sessions
-- Displays progress, speed, peer count, and status
-
-#### Show Statistics
-
-```bash
-uv run python main.py stats
-```
-
-- Comprehensive client statistics
-- DHT node information
-- Scheduler status and configuration
-
-#### Daemon Mode
-
-```bash
-uv run python main.py daemon [--port PORT] [--download-dir DIR]
-```
-
-- Runs continuously in background
-- Handles multiple torrents simultaneously
-- Automatic peer management and DHT maintenance
-
-### Torrent Creation
-
-Create .torrent files from your own content:
-
-```bash
-# Basic usage
-uv run python torrent_creator.py -i input_file -o output.torrent -t http://tracker.example.com/announce
-
-# Advanced options
-uv run python torrent_creator.py \
-    --input /path/to/content \
-    --output release.torrent \
-    --trackers http://tracker1.example.com/announce http://tracker2.example.com/announce \
-    --piece-length 524288  # 512KB pieces
-```
 
 ## 🏗 Architecture
 
@@ -255,7 +136,7 @@ The BitTorrent client follows a modular, event-driven architecture:
 - Automatic announce scheduling
 - Multi-tracker management
 
-####  **DHT** (`src/core/dht.py`)
+### Web Interfaces
 
 - Kademlia distributed hash table
 - Peer discovery without trackers
@@ -269,43 +150,92 @@ The BitTorrent client follows a modular, event-driven architecture:
 - Piece verification with SHA-1
 - Download progress tracking
 
+
+## Component Communication
+
+### Data Flow
+1. **Peer Discovery**: Peers announce to tracker, receive peer lists
+2. **Data Transfer**: Direct peer-to-peer BitTorrent protocol communication
+3. **Visualization**: Each peer reports stats to central aggregator
+4. **Monitoring**: Standalone visualizer fetches aggregated data for display
+
+##  Visualization Features
+
+### Real-time Network Monitoring
+
+- **🌐 Network topology**: Visual graph of peer connections
+- **📊 Transfer statistics**: Live bandwidth and transfer rates
+- **🎯 Piece distribution**: Visual representation of file piece sharing
+- **📈 Historical data**: Trend analysis and performance metrics
+- **🔄 Connection states**: Real-time connection status updates
+
+
+### Web Interfaces
+
+Each peer provides a web interface at `http://localhost:{visualizer-port}` showing:
+- Download/upload progress
+- Connected peers
+- Transfer rates
+- Piece availability
+
+### Standalone Visualizer
+
+The PyGame visualizer provides:
+- Interactive network graph
+- Real-time animations
+- Color-coded connection states
+- Performance metrics overlay
+
+
 ##  Configuration
 
 ### Default Settings
 
 ```python
-# Scheduler Configuration
+# Network Configuration
+DEFAULT_TRACKER_PORT = 8080
+DEFAULT_AGGREGATOR_PORT = 8085
+DEFAULT_PEER_PORT = 6881
+DEFAULT_VISUALIZER_PORT = 8081
+
+# Performance Settings
 MAX_CONCURRENT_TORRENTS = 5
 MAX_PEERS_PER_TORRENT = 50
-LISTEN_PORT = 6881
-
-# Piece Manager Configuration
-MAX_CONCURRENT_PIECES = 10
-MAX_REQUESTS_PER_PEER = 5
 BLOCK_SIZE = 16384  # 16KB
 
-# DHT Configuration
-DHT_PORT = 6882  # LISTEN_PORT + 1
-DHT_BOOTSTRAP_NODES = [
-    'router.bittorrent.com:6881',
-    'dht.transmissionbt.com:6881',
-    'router.utorrent.com:6881'
-]
-
-# Connection Timeouts
-PEER_CONNECT_TIMEOUT = 10.0
-TRACKER_TIMEOUT = 30.0
-DHT_QUERY_TIMEOUT = 5.0
+# Visualization Settings
+VISUALIZER_UPDATE_INTERVAL = 1.0  # seconds
+AGGREGATOR_CLEANUP_INTERVAL = 30.0  # seconds
 ```
 
-### Environment Variables
+##  Development
 
-```bash
-# Optional environment configuration
-export BITTORRENT_DOWNLOAD_DIR="/path/to/downloads"
-export BITTORRENT_LISTEN_PORT="6881"
-export BITTORRENT_MAX_PEERS="100"
+### Project Structure
+
 ```
+BitTorrent/
+├── main.py                 # Main application entry point
+├── aggregator.py          # Central data aggregator
+├── visualizer.py          # Standalone PyGame visualizer
+├── torrent_creator.py     # Torrent creation utility
+├── src/core/              # Core BitTorrent implementation
+│   ├── bit_torrent_peer.py    # Main peer logic
+│   ├── bitorrentGui.py        # GUI components
+│   ├── cli_visualizer.py      # CLI visualization
+│   ├── dht.py                 # Distributed Hash Table
+│   ├── local_tracker.py       # Local tracker implementation
+│   ├── peer_connection.py     # Peer wire protocol
+│   ├── peer_server.py         # Peer server
+│   ├── piece_manager.py       # Piece management
+│   ├── scheduler.py           # Multi-torrent scheduling
+│   ├── storage.py             # File I/O management
+│   ├── torrent_parser.py      # .torrent parsing
+│   ├── tracker_client.py      # Tracker communication
+│   └── utils.py               # Common utilities
+├── requirements.txt       # Python dependencies
+└── README.md             # This file
+```
+
 
 ##  Performance
 
@@ -317,173 +247,47 @@ export BITTORRENT_MAX_PEERS="100"
 | **DHT Bootstrap**    | ~30-60 seconds to 20+ nodes           |
 | **Peer Connections** | Up to 50 concurrent per torrent       |
 | **Download Speed**   | Limited by network and peers          |
-| **Memory Usage**     | ~10-50MB depending on active torrents |
+| **Visualization**    | 60 FPS real-time updates              |
+| **Memory Usage**     | ~10-50MB per peer instance            |
 
-### Optimization Features
 
-- **Async I/O** throughout for maximum concurrency
-- **Rate limiting** to prevent overwhelming trackers/peers
-- **Connection pooling** for efficient resource usage
-- **Lazy loading** of torrent metadata
-- **Efficient bitfield** operations for piece tracking
 
-##  Testing
+##  Requirements
 
-### Run Basic Tests
+- **Python 3.13+**
+- **asyncio** support
+- **Network connectivity** for peer communication
+- **PyGame** (for standalone visualizer)
+- **PyQt6** (for GUI components)
 
-```bash
-# Test installation and imports
-uv run python -c "from src.core.scheduler import TorrentScheduler; print('✅ Import successful')"
+##  Installation
 
-# Test torrent creation
-echo "Hello World" > test.txt
-uv run python torrent_creator.py -i test.txt -o test.torrent -t http://test.tracker.com/announce
-
-# Test client functionality
-uv run python main.py stats
-```
-
-### Manual Testing
+### Using uv (Recommended)
 
 ```bash
-# Create test torrent
-uv run python torrent_creator.py --input README.md --output readme.torrent --trackers http://tracker.example.com/announce
-
-# Test adding torrent (will timeout gracefully)
-uv run python main.py add readme.torrent
-
-# Check DHT functionality
-uv run python main.py stats  # Should show connected DHT nodes
-```
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-BitTorrent/
-├── src/core/           # Core BitTorrent implementation
-│   ├── dht.py         # DHT (Distributed Hash Table)
-│   ├── encryption.py  # Encryption utilities
-│   ├── piece_manager.py # Piece download coordination
-│   ├── peer_connection.py # Peer wire protocol
-│   ├── scheduler.py   # Multi-torrent scheduling
-│   ├── storage.py     # File I/O management
-│   ├── torrent_parser.py # .torrent/.magnet parsing
-│   ├── tracker_client.py # Tracker communication
-│   └── utils.py       # Common utilities
-├── main.py            # CLI application
-├── torrent_creator.py # Torrent creation tool
-├── pyproject.toml     # Project configuration
-└── README.md          # This file
-```
-
-### Adding New Features
-
-1. **Create feature branch**: `git checkout -b feature/new-feature`
-2. **Implement changes** in appropriate module
-3. **Add tests** for new functionality
-4. **Update documentation** as needed
-5. **Submit pull request**
-
-
-
-### Development Setup
-
-```bash
-# Clone your fork
 git clone https://github.com/yourusername/BitTorrent.git
 cd BitTorrent
-
-# Install development dependencies
-uv sync --dev
-
-# Run tests
-uv run pytest
-
-# Run linting
-uv run black src/
-uv run flake8 src/
-```
-
-## Protocol Support
-
-### Implemented BEPs (BitTorrent Enhancement Proposals)
-
-- ✅ **BEP-0003**: The BitTorrent Protocol Specification
-- ✅ **BEP-0005**: DHT Protocol
-- ✅ **BEP-0012**: Multitracker Metadata Extension (partial)
-- ⚠️ **BEP-0009**: Extension for Peers to Send Metadata Files (planned)
-- ⚠️ **BEP-0010**: Extension Protocol (planned)
-
-### Wire Protocol Messages
-
-| Message          | Status | Description                     |
-| ---------------- | ------ | ------------------------------- |
-| `handshake`      | ✅     | Initial peer handshake          |
-| `keep-alive`     | ✅     | Connection maintenance          |
-| `choke`          | ✅     | Peer choking mechanism          |
-| `unchoke`        | ✅     | Peer unchoking                  |
-| `interested`     | ✅     | Interest signaling              |
-| `not interested` | ✅     | Disinterest signaling           |
-| `have`           | ✅     | Piece availability announcement |
-| `bitfield`       | ✅     | Piece availability bitmap       |
-| `request`        | ✅     | Piece block requests            |
-| `piece`          | ✅     | Piece block data                |
-| `cancel`         | ✅     | Request cancellation            |
-
-##  Known Limitations
-
-- **Magnet URI metadata exchange** not fully implemented
-- **uTP (UDP Transport Protocol)** not implemented
-- **Protocol encryption** foundation only (not full MSE)
-- **Peer exchange (PEX)** not implemented
-- **Web seeding** not supported
-
-##  Troubleshooting
-
-### Common Issues
-
-#### "Address already in use" Error
-
-```bash
-# Kill existing processes on port 6881
-sudo lsof -ti:6881 | xargs kill -9
-
-# Or use a different port
-uv run python main.py daemon --port 6882
-```
-
-#### DHT Bootstrap Fails
-
-```bash
-# Check network connectivity
-ping router.bittorrent.com
-
-# Try with verbose logging
-PYTHONPATH=. uv run python -c "
-import logging
-logging.basicConfig(level=logging.DEBUG)
-import asyncio
-from src.core.dht import DHT
-asyncio.run(DHT().start())
-"
-```
-
-#### Dependencies Issues
-
-```bash
-# Clean install
-rm -rf .venv uv.lock
 uv sync
 ```
 
-### Debug Mode
+### Using pip
 
-Enable verbose logging:
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
+```bash
+git clone https://github.com/yourusername/BitTorrent.git
+cd BitTorrent
+pip install -r requirements.txt
 ```
+
+
+##  Usage Guide
+Check out the [Local Setup Guide](LOCAL_SETUP_GUIDE.md) for detailed step-by-step instructions!
+
+## 📄 License
+
+MIT License - Feel free to use, modify, and distribute.
+
+---
+**Happy torrenting!** 🚀 May your downloads be fast and your seeds be plentiful.
+
+
 
